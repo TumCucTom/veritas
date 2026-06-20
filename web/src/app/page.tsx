@@ -2,6 +2,8 @@ import { VeritasProvider } from "../lib/store";
 import { ControlPlaneProvider } from "../lib/controlPlaneStore";
 import Controls from "../components/Controls";
 import HeroCounters from "../components/HeroCounters";
+import MassiveContagionStage from "../components/MassiveContagionStage";
+import TechnicalProofStrip from "../components/TechnicalProofStrip";
 import RacePanel from "../components/RacePanel";
 import BankStrip from "../components/BankStrip";
 import Inspector from "../components/Inspector";
@@ -25,6 +27,8 @@ export default function Home() {
           <Controls />
           <AttackBanner />
           <HeroCounters />
+          <TechnicalProofStrip />
+          <MassiveContagionStage />
 
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <RacePanel regime="siloed" />

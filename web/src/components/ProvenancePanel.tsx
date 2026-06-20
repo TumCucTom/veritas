@@ -30,7 +30,8 @@ export default function ProvenancePanel() {
   }, []);
 
   useEffect(() => {
-    void loadNode();
+    const id = window.setTimeout(() => void loadNode(), 0);
+    return () => window.clearTimeout(id);
   }, [loadNode]);
 
   const onEvent = useCallback(
