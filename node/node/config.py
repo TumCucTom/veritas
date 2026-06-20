@@ -10,15 +10,26 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-# Wire dimension = FEATURE_DIM + 1 (logistic bias). Reused from core.
+# FEATURE_DIM (the per-row feature contract) is reused from core; the FLAT
+# predict vector is FEATURE_DIM + 1 (logistic bias). The FEDERATION wire,
+# however, carries the LIVE-ENSEMBLE vector, whose dimension is the canonical
+# ``LIVE_ENSEMBLE_DIM`` derived from core's ``weight_dim`` helpers (no magic
+# number) — imported here so config and the federation client agree.
 from veritas_core.data import FEATURE_DIM  # noqa: E402
+
+from .live_ensemble import LIVE_ENSEMBLE_DIM, noise_sensitivity  # noqa: E402
 
 DEFAULT_FEATURE_MAP = str(Path(__file__).resolve().parent.parent / "sample_data" / "feature_map.yaml")
 
 # DP parameters mirror core/veritas_core/engine.py so node updates match the
 # control plane's expected clipping/noise regime. The plane also advertises
 # dpParams in /v1/rounds/current; the node prefers those when present.
-MAX_NORM = 2.0
+#
+# MAX_NORM is the legacy single-clip radius retained as the dpParams fallback
+# for the flat path; the live-ensemble path clips PER BLOCK and calibrates noise
+# to the ACTUAL total L2 sensitivity (``noise_sensitivity()``), so the implied
+# (eps, delta) matches what is really enforced rather than a stale 2.0.
+MAX_NORM = noise_sensitivity()
 SIGMA = 0.05
 EPOCHS = 8
 LR = 0.3
@@ -62,7 +73,22 @@ class NodeConfig:
 
     @property
     def dim(self) -> int:
+        """Flat predict/edge weight dimension (FEATURE_DIM + logistic bias).
+
+        This governs the LOCAL predict path and the Tier-0 edge model, which are
+        flat-logistic. The FEDERATION wire uses ``wire_dim`` (the live ensemble).
+        """
         return FEATURE_DIM + 1
+
+    @property
+    def wire_dim(self) -> int:
+        """Live-ensemble dimension on the node→plane federation wire.
+
+        Derived from core's canonical ``weight_dim`` helpers (no magic number);
+        the dimension-agnostic plane reads the expected length off the genesis
+        model, which is this long.
+        """
+        return LIVE_ENSEMBLE_DIM
 
     @classmethod
     def from_env(cls) -> "NodeConfig":

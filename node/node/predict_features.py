@@ -7,22 +7,30 @@ may pass any subset of the named features; absent ones default to 0.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from veritas_core.data import FEATURE_DIM
 
-from .connectors.feature_map import FEATURE_ORDER
+from .connectors.feature_map import FEATURE_ALIASES, FEATURE_ORDER
 
 
 def transaction_to_features(txn: dict) -> np.ndarray:
     x = np.zeros(FEATURE_DIM, dtype=np.float64)
+    # Resolve snake_case aliases (account_age -> accountAge, etc.) so a real
+    # bank payload speaks the same contract as a CSV connector load.
+    txn = {FEATURE_ALIASES.get(k, k): v for k, v in txn.items()}
     # Direct named pass-through for any feature in the contract.
     for idx, name in enumerate(FEATURE_ORDER):
         if name in txn:
             try:
-                x[idx] = float(txn[name])
+                v = float(txn[name])
             except (TypeError, ValueError):
-                pass
+                continue
+            # Drop non-finite values (NaN/inf) rather than scoring on them.
+            if math.isfinite(v):
+                x[idx] = v
     # If the caller only signalled a campaign match, synthesise the mule shape
     # (benign generic axes, strong campaign signature) so it scores as the
     # typology the federated model learned.

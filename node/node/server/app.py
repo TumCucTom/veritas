@@ -16,7 +16,7 @@ import json
 from contextlib import asynccontextmanager
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -153,6 +153,24 @@ def edge_cohort_open(body: CohortOpenBody) -> dict:
     return table
 
 
+def _validate_vector(values: list[float], expected_dim: int, *, what: str) -> np.ndarray:
+    """Parse a wire float vector, rejecting wrong length and non-finite values.
+
+    Devices/SDKs are untrusted input: a wrong-dimension or NaN/inf vector must be
+    rejected with a clear 422 BEFORE it reaches training / DP / aggregation,
+    where it would silently poison the edge model (NaN propagates through the
+    masked sum) or crash deep in numpy.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    if arr.ndim != 1 or arr.shape[0] != expected_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{what} must have length {expected_dim}, got {arr.shape[0]}")
+    if not np.all(np.isfinite(arr)):
+        raise HTTPException(status_code=422, detail=f"{what} contains non-finite values")
+    return arr
+
+
 @app.post("/edge/v1/updates")
 def edge_updates(body: EdgeUpdateBody) -> dict:
     # The device sends a MASKED update (clipped + DP-noised on-device, then
@@ -160,8 +178,14 @@ def edge_updates(body: EdgeUpdateBody) -> dict:
     # the cohort and can recover the aggregate SUM at close — it NEVER sees,
     # stores, or can derive any individual device's cleartext update.
     # deviceToken is ephemeral, not a customer identifier.
+    #
+    # The MASKED vector is still the edge-model dimension (masking is additive),
+    # so we validate length + finiteness here. A masked value is large (mask
+    # scale) but always finite; NaN/inf or a wrong length is a malformed/hostile
+    # message and is rejected before it can poison the secure sum.
+    update = _validate_vector(body.update, runtime.cfg.dim, what="edge update")
     runtime.engine.edge_aggregate(
-        np.asarray(body.update, dtype=np.float64), body.numExamples,
+        update, body.numExamples,
         cohort_id=body.cohortId, client_id=body.clientId,
     )
     return {"accepted": True}
@@ -177,7 +201,11 @@ def edge_cohort_close(_body: CohortCloseBody | None = None) -> dict:
 
 @app.post("/edge/v1/score")
 def edge_score(body: EdgeScoreBody) -> dict:
-    x = np.asarray(body.features, dtype=np.float64)
+    # /edge/v1/score scores a single FEATURE_DIM feature row (no bias term).
+    # Validate length + finiteness before scoring: a wrong-dimension or NaN/inf
+    # feature row is hostile/malformed input and must be rejected with a clear
+    # 422 rather than crash deep in the model forward pass.
+    x = _validate_vector(body.features, runtime.cfg.dim - 1, what="features")
     label, conf = runtime.engine.predict(x, weights=runtime.engine.edge_w, edge=True)
     indicators = ["scam-in-progress signal"] if conf >= 0.5 else []
     return {"label": label, "confidence": round(conf, 3), "indicators": indicators}

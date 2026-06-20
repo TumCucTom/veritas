@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "Veritas Tier 1 Bank Node — one bank's local trainer + federation client + connector runtime + edge aggregator."
 requires-python = ">=3.13"
 dependencies = [
+    # The node reuses all FL math, the live ensemble, DP, and the canonical
+    # secure-agg PRG from veritas-core, so it is a hard runtime dependency — the
+    # node is not independently installable without it. In this monorepo it is
+    # resolved as an editable local sibling (see [tool.uv.sources]).
+    "veritas-core>=0.1.0",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "sse-starlette>=2.1",
@@ -26,6 +31,12 @@ packages = [
     "node.server",
     "node.federation",
 ]
+
+# Resolve the veritas-core runtime dependency from the local monorepo checkout
+# (editable) rather than a package index, so a fresh `uv pip install -e .` of the
+# node wires in the sibling core without publishing it first.
+[tool.uv.sources]
+veritas-core = { path = "../core", editable = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

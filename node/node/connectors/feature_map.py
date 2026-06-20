@@ -47,6 +47,24 @@ FEATURE_ORDER = [
 ]
 assert len(FEATURE_ORDER) == FEATURE_DIM, "FEATURE_ORDER must match FEATURE_DIM"
 
+# Common snake_case / bank-native field names mapped to the canonical
+# (camelCase) contract names. Real bank CSVs use names like ``account_age`` and
+# ``velocity_1h``; this alias table lets such a feature_map.yaml load without the
+# bank renaming its columns. Mirrors bank-connectors' FEATURE_ALIASES so the two
+# connector implementations resolve names identically.
+FEATURE_ALIASES = {
+    "account_age": "accountAge",
+    "velocity_1h": "velocity",
+    "is_new_payee": "isTransfer",
+    "is_transfer": "isTransfer",
+    "campaign_signature": "campaignSig",
+    "campaign_sig": "campaignSig",
+    "old_orig": "oldOrig",
+    "new_orig": "newOrig",
+    "old_dest": "oldDest",
+    "new_dest": "newDest",
+}
+
 
 @dataclass
 class FeatureSpec:
@@ -91,13 +109,17 @@ def load_feature_map(path: str | Path) -> FeatureMap:
 
     features: dict[str, FeatureSpec] = {}
     for name, spec in (doc.get("features", {}) or {}).items():
-        if name not in FEATURE_ORDER:
+        # Resolve snake_case / bank-native aliases to the canonical contract
+        # name BEFORE validating, so a feature_map.yaml may declare e.g.
+        # ``account_age`` and it is stored under ``accountAge``.
+        canonical = FEATURE_ALIASES.get(name, name)
+        if canonical not in FEATURE_ORDER:
             raise ValueError(
                 f"feature_map: feature {name!r} is not part of the FEATURE_DIM contract {FEATURE_ORDER}"
             )
         spec = spec or {}
-        features[name] = FeatureSpec(
-            name=name,
+        features[canonical] = FeatureSpec(
+            name=canonical,
             source_key=spec.get("from"),
             iso_path=spec.get("iso_path"),
             transform=spec.get("transform"),

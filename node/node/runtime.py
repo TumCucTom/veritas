@@ -146,7 +146,12 @@ class NodeRuntime:
         self.engine.train_silo_step()
         silo_recall = self.engine.silo_recall()
         result = self.client.run_round(data, y, silo_recall=silo_recall)
-        # Sync the new global model back into the engine.
+        # Sync the new global model back into the engine. The wire carries the
+        # full LIVE-ENSEMBLE packed vector and the engine scores/evaluates with
+        # the live ensemble directly (see ``NodeEngine.predict`` / ``_det``), so
+        # we hand it the whole packed vector — projecting it down to the flat
+        # logistic block would desync /predict and the federated-vs-siloed
+        # counterfactual from what actually federated.
         gw, ver = self.client.pull_global()
         self.engine.set_global(gw, ver)
         self.engine.accrue_counters()

@@ -22,13 +22,20 @@ from veritas_core.data import FEATURE_DIM
 from .feature_map import FEATURE_ORDER, FeatureMap, FeatureSpec, load_feature_map
 
 
+def _finite_or_default(x: float, default: float) -> float:
+    """Reject NaN/inf parsed from a source: a non-finite feature would poison
+    training/DP/aggregation downstream, so we fall back to the column default
+    rather than letting it through."""
+    return x if math.isfinite(x) else default
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     if value is None:
         return default
     if isinstance(value, bool):
         return 1.0 if value else 0.0
     if isinstance(value, (int, float)):
-        return float(value)
+        return _finite_or_default(float(value), default)
     s = str(value).strip()
     if s == "":
         return default
@@ -37,8 +44,13 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return 1.0
     if low in ("false", "no", "n"):
         return 0.0
+    # Explicitly reject the textual non-finite literals Python's float() accepts
+    # ("nan", "inf", "-inf", "infinity"): a connector must never inject a
+    # non-finite feature value from a CSV/XML source.
+    if low.lstrip("+-") in ("nan", "inf", "infinity"):
+        return default
     try:
-        return float(s)
+        return _finite_or_default(float(s), default)
     except ValueError:
         return default
 

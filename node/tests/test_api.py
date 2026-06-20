@@ -105,3 +105,38 @@ def test_edge_score_returns_label():
     r = client.post("/edge/v1/score", json={"features": [0.0] * dim})
     assert r.status_code == 200
     assert r.json()["label"] in ("fraud", "legitimate")
+
+
+def test_edge_updates_reject_wrong_dimension():
+    rt, _ = _runtime()
+    client = _app(rt)
+    good_dim = rt.cfg.dim  # edge update is the edge-model dimension
+    r = client.post("/edge/v1/updates", json={
+        "deviceToken": "d", "update": [0.0] * (good_dim - 1), "numExamples": 1})
+    assert r.status_code == 422
+
+
+def test_edge_validate_vector_rejects_non_finite():
+    """The server-side validator rejects NaN/inf (JSON can't even carry inf, so
+    we exercise the guard directly — a non-finite value would poison the sum)."""
+    import numpy as np
+    from fastapi import HTTPException
+
+    from node.server.app import _validate_vector
+
+    bad = [0.0, float("nan"), 0.0]
+    try:
+        _validate_vector(bad, 3, what="edge update")
+        assert False, "non-finite vector was accepted"
+    except HTTPException as exc:
+        assert exc.status_code == 422
+    # a finite vector of the right length passes
+    out = _validate_vector([1.0, 2.0, 3.0], 3, what="edge update")
+    assert np.allclose(out, [1.0, 2.0, 3.0])
+
+
+def test_edge_score_rejects_wrong_dimension():
+    rt, _ = _runtime()
+    client = _app(rt)
+    r = client.post("/edge/v1/score", json={"features": [0.0] * (rt.cfg.dim - 2)})
+    assert r.status_code == 422
