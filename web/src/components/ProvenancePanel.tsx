@@ -42,7 +42,11 @@ export default function ProvenancePanel() {
   );
   useEvents(onEvent);
 
-  const rows: Provenance[] = cp.provenance.length > 0 ? cp.provenance : nodeRecords;
+  // Cap to the most recent entries: the ledger grows one row per round on the
+  // live plane (thousands), and rendering them all bloats the DOM and makes the
+  // page janky. Show the latest, newest first.
+  const allRows: Provenance[] = cp.provenance.length > 0 ? cp.provenance : nodeRecords;
+  const rows: Provenance[] = allRows.slice(-12).reverse();
   const source: "control-plane" | "node" =
     cp.provenance.length > 0 ? "control-plane" : "node";
 

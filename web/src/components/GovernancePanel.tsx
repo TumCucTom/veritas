@@ -81,7 +81,11 @@ export default function GovernancePanel() {
           </p>
         ) : (
           <ol className="flex flex-col gap-1.5">
-            {registry.map((m) => (
+            {/* Cap the rendered registry: the live plane accrues a model version
+                every round (thousands), and rendering them all balloons the DOM
+                to hundreds of thousands of px and makes the whole page janky.
+                Show the most recent versions, newest first. */}
+            {[...registry].slice(-14).reverse().map((m) => (
               <RegistryRow key={m.version} entry={m} />
             ))}
           </ol>

@@ -6,35 +6,43 @@
   semantic green (federated wins) vs red (at-risk) for the race.
 */
 :root {
-  --bg-deep: #0a0e16;
-  --bg-base: #0d1320;
-  --bg-surface: #131b2c;
-  --bg-surface-2: #182238;
-  --border-default: #233148;
-  --border-strong: #324363;
+  /* Deeper, cooler canvas with more separation between elevation layers so
+     panels read as crafted glass-on-ink rather than flat cards. */
+  --bg-deep: #06090f;
+  --bg-base: #0a0e18;
+  --bg-surface: #0f1626;
+  --bg-surface-2: #16202f;
+  --border-default: #1f2a3d;
+  --border-strong: #30405b;
 
-  --text-primary: #f2efe6;
-  --text-secondary: #aeb6c6;
-  --text-muted: #6f7a90;
+  --text-primary: #f5f2ea;
+  --text-secondary: #a6b0c1;
+  --text-muted: #69748a;
 
-  --accent-gold: #d6a85b;
-  --accent-gold-soft: #f0d49a;
+  --accent-gold: #e2b66c;
+  --accent-gold-soft: #f4dba6;
 
-  --fed: #34d399;
+  --fed: #3ddc97;
   --fed-deep: #0d6e4f;
-  --fed-glow: rgba(52, 211, 153, 0.28);
-  --silo: #f04a52;
+  --fed-glow: rgba(61, 220, 151, 0.30);
+  --silo: #fb5b63;
   --silo-deep: #7a1d22;
-  --silo-glow: rgba(240, 74, 82, 0.26);
-  --neutral-dot: #2a3346;
+  --silo-glow: rgba(251, 91, 99, 0.28);
+  --neutral-dot: #283446;
 
   --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
   --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-jetbrains), ui-monospace, "SF Mono", monospace;
 
+  --radius-panel: 18px;
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-  --shadow-panel: 0 24px 60px -28px rgba(0, 0, 0, 0.85);
-  --shadow-raise: 0 8px 28px -14px rgba(0, 0, 0, 0.7);
+  /* Each panel gets a 1px top-edge highlight (premium lift) plus a soft, far
+     outer shadow. Applied via the shared --shadow tokens every card already
+     uses, so the whole site elevates at once. */
+  --shadow-panel: inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    0 32px 72px -34px rgba(0, 0, 0, 0.92);
+  --shadow-raise: inset 0 1px 0 0 rgba(255, 255, 255, 0.045),
+    0 14px 38px -20px rgba(0, 0, 0, 0.8);
 }
 
 @theme inline {
@@ -65,11 +73,16 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   letter-spacing: -0.011em;
-  /* Editorial atmosphere: a low gold vignette + faint grain via radial layers. */
+  /* Premium atmosphere: a restrained gold/teal aurora over a near-black ink,
+     plus a barely-there data grid for craft and depth. */
   background-image:
-    radial-gradient(120% 90% at 8% -10%, rgba(214, 168, 91, 0.07), transparent 45%),
-    radial-gradient(90% 80% at 100% 0%, rgba(52, 211, 153, 0.05), transparent 50%),
-    radial-gradient(100% 80% at 50% 120%, rgba(240, 74, 82, 0.045), transparent 55%);
+    radial-gradient(115% 85% at 6% -12%, rgba(226, 182, 108, 0.06), transparent 42%),
+    radial-gradient(85% 75% at 100% -5%, rgba(61, 220, 151, 0.045), transparent 48%),
+    radial-gradient(95% 75% at 50% 118%, rgba(251, 91, 99, 0.035), transparent 52%),
+    linear-gradient(transparent 0 95%, rgba(255, 255, 255, 0.018) 95% 100%),
+    linear-gradient(90deg, transparent 0 95%, rgba(255, 255, 255, 0.018) 95% 100%);
+  background-size:
+    100% 100%, 100% 100%, 100% 100%, 56px 56px, 56px 56px;
   background-attachment: fixed;
 }
 
