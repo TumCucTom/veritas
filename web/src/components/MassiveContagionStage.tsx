@@ -5,6 +5,7 @@ import { formatNumber } from "../lib/format";
 import { useVeritas } from "../lib/store";
 import {
   LOGICAL_CUSTOMERS,
+  VISIBLE_POINTS,
   computeContagionFrame,
   type ContagionFrame,
   type ContagionRegime,
@@ -17,6 +18,17 @@ const COLORS = {
   corridor: "rgba(214, 168, 91, 0.18)",
   band: "rgba(174, 182, 198, 0.06)",
 } as const;
+
+// Reusable per-frame scratch so the draw loop allocates nothing. Shared safely
+// across both panels: drawFrame runs start-to-finish synchronously on each call.
+let effState: Uint8Array | null = null;
+let effAlpha: Float32Array | null = null;
+function ensureScratch(n: number) {
+  if (!effState || effState.length < n) {
+    effState = new Uint8Array(n);
+    effAlpha = new Float32Array(n);
+  }
+}
 
 export default function MassiveContagionStage() {
   const { state } = useVeritas();
@@ -67,8 +79,9 @@ export default function MassiveContagionStage() {
           </h2>
           <p className="mt-3 max-w-3xl text-[13px] leading-relaxed text-text-secondary sm:text-[14px]">
             A deterministic SIR-style graph simulation over {formatNumber(LOGICAL_CUSTOMERS)}{" "}
-            simulated customers. Bank clusters are local communities; bright corridors are sampled
-            mule-payment paths between institutions.
+            simulated customers, rendered from {formatNumber(VISIBLE_POINTS)} sampled points
+            (1 dot ≈ {Math.round(LOGICAL_CUSTOMERS / VISIBLE_POINTS)} customers). Bank clusters are
+            local communities; bright corridors are sampled mule-payment paths between institutions.
           </p>
         </div>
         <div
@@ -192,13 +205,20 @@ function ContagionCanvas({
     if (!ctx) return;
 
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const rect = canvas.getBoundingClientRect();
-    const width = Math.max(520, Math.floor(rect.width));
-    const height = Math.max(320, Math.floor(rect.height));
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let width = 0;
+    let height = 0;
+
+    const sizeCanvas = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(520, Math.floor(rect.width));
+      height = Math.max(320, Math.floor(rect.height));
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+
+    sizeCanvas();
 
     let raf = 0;
     const started = performance.now();
@@ -212,7 +232,25 @@ function ContagionCanvas({
     };
 
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+
+    // Re-fit the backing store when the container resizes and repaint the final
+    // frame — otherwise the canvas stretches/blurs until the next round. Skip the
+    // synthetic initial callback so we don't fight the entry animation.
+    let firstObservation = true;
+    const observer = new ResizeObserver(() => {
+      if (firstObservation) {
+        firstObservation = false;
+        return;
+      }
+      sizeCanvas();
+      drawFrame(ctx, frame, regime, width, height, 1);
+    });
+    observer.observe(canvas);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
   }, [frame, regime, round]);
 
   return (
@@ -247,17 +285,59 @@ function drawFrame(
 
   const wave = regime === "federated" ? easeOut(phase) : Math.min(1, phase * 1.15);
   const pointSize = width > 620 ? 1.35 : 1.05;
-  for (const point of frame.points) {
-    let state = point.state;
-    const centerDistance = Math.hypot(point.x - 0.5, point.y - 0.5);
-    const sourceDistance = Math.min(Math.hypot(point.x - 0.14, point.y - 0.2), Math.hypot(point.x - 0.83, point.y - 0.78));
-    if (state === "protected" && centerDistance > wave * 0.78 + 0.08) state = "neutral";
-    if (state === "exposed" && sourceDistance > wave * 0.88 + 0.08) state = "neutral";
+  const hubSize = pointSize * 2.4;
+  const points = frame.points;
+  const n = points.length;
+  ensureScratch(n);
+  const eff = effState!;
+  const effA = effAlpha!;
 
-    ctx.globalAlpha = state === "neutral" ? 0.52 : 0.58 + point.intensity * 0.42;
-    ctx.fillStyle =
-      state === "protected" ? COLORS.protected : state === "exposed" ? COLORS.exposed : COLORS.neutral;
-    ctx.fillRect(point.x * width, point.y * height, point.hub ? pointSize * 2.4 : pointSize, point.hub ? pointSize * 2.4 : pointSize);
+  // Pass 1: resolve each point's effective state for this wave phase, and draw
+  // the neutral majority under a SINGLE fill state (neutral alpha is constant).
+  // The dominant cost — ~32k per-point fillStyle/globalAlpha writes — collapses
+  // to one; only the active minority pays per-point alpha in pass 2.
+  ctx.fillStyle = COLORS.neutral;
+  ctx.globalAlpha = 0.52;
+  for (let i = 0; i < n; i++) {
+    const point = points[i];
+    let state = point.state;
+    if (state === "protected") {
+      const d = Math.hypot(point.x - 0.5, point.y - 0.5);
+      if (d > wave * 0.78 + 0.08) state = "neutral";
+    } else if (state === "exposed") {
+      const d = Math.min(
+        Math.hypot(point.x - 0.14, point.y - 0.2),
+        Math.hypot(point.x - 0.83, point.y - 0.78),
+      );
+      if (d > wave * 0.88 + 0.08) state = "neutral";
+    }
+    if (state === "neutral") {
+      eff[i] = 0;
+      const s = point.hub ? hubSize : pointSize;
+      ctx.fillRect(point.x * width, point.y * height, s, s);
+    } else {
+      eff[i] = state === "exposed" ? 1 : 2;
+      effA[i] = 0.58 + point.intensity * 0.42;
+    }
+  }
+
+  // Pass 2: the active minority — exposed then protected — fillStyle set once per
+  // colour; only per-point alpha varies.
+  ctx.fillStyle = COLORS.exposed;
+  for (let i = 0; i < n; i++) {
+    if (eff[i] !== 1) continue;
+    const point = points[i];
+    ctx.globalAlpha = effA[i];
+    const s = point.hub ? hubSize : pointSize;
+    ctx.fillRect(point.x * width, point.y * height, s, s);
+  }
+  ctx.fillStyle = COLORS.protected;
+  for (let i = 0; i < n; i++) {
+    if (eff[i] !== 2) continue;
+    const point = points[i];
+    ctx.globalAlpha = effA[i];
+    const s = point.hub ? hubSize : pointSize;
+    ctx.fillRect(point.x * width, point.y * height, s, s);
   }
   ctx.globalAlpha = 1;
 
