@@ -1,6 +1,5 @@
 "use client";
 import { useControlPlane } from "../lib/controlPlaneStore";
-import { controlPlane } from "../lib/controlplane";
 import type { ModelRegistryEntry, ModelStatus } from "../lib/controlplane-types";
 
 /**

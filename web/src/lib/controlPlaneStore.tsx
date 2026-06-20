@@ -69,8 +69,9 @@ export function ControlPlaneProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     mounted.current = true;
-    void refresh();
+    const id = window.setTimeout(() => void refresh(), 0);
     return () => {
+      window.clearTimeout(id);
       mounted.current = false;
     };
   }, [refresh]);
