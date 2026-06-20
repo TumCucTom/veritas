@@ -3,10 +3,20 @@ import { gnnBenchmark } from "./gnnBenchmark.js";
 const BANKS=[["bank0","Barclays",2100000],["bank1","NatWest",1900000],
 ["bank2","Lloyds",1750000],["bank3","HSBC",1600000],["bank4","Santander",1400000],
 ["bank5","Monzo",900000],["bank6","Starling",700000],["bank7","Nationwide",1500000]];
+// Per-bank "personality" so the eight institutions never read identically.
+// FED_CAP: where federation lifts each bank to (all high — shared intelligence).
+// SILO_CAP: where each bank plateaus ALONE (low — so the siloed map stays red).
+const FED_CAP =[0.972,0.963,0.958,0.969,0.961,0.949,0.955,0.967];
+const SILO_CAP=[0.66,0.61,0.58,0.64,0.55,0.49,0.52,0.69];
 function detection(regime,round,i,campaign){
-  if(!campaign) return 0.9;
-  if(regime==="federated") return Math.min(0.97,0.4+0.22*round);
-  return Math.min(0.9,Math.max(0.1,0.1+0.12*(round-i*1.2)));
+  if(!campaign) return Math.min(FED_CAP[i],0.9); // calm baseline, slight per-bank spread
+  if(regime==="federated")
+    // Federation pulls every bank quickly toward its (high) ceiling.
+    return Math.max(0.4,Math.min(FED_CAP[i],0.5+0.17*round+0.004*i));
+  // Siloed: each bank is hit as the campaign propagates (onset ~ i), crawls up
+  // slowly on its own data, and plateaus LOW — the visible red contagion.
+  const onset=i*1.1, t=Math.max(0,round-onset);
+  return Math.max(0.12,Math.min(SILO_CAP[i],0.16+0.055*t));
 }
 export function snapshot(round,campaign,attack){
   const banks=BANKS.map(([id,name,customers],i)=>({id,name,customers,
