@@ -79,6 +79,7 @@ Public API
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -90,6 +91,9 @@ import numpy as np
 # pick a large spread.
 _MASK_SCALE = 1.0e6
 
+# Canonical seed length: 32 raw bytes (256 bits), the HMAC-SHA256 key size.
+SEED_BYTES = 32
+
 SeedKey = Tuple[str, str]  # canonical (low_id, high_id)
 
 
@@ -98,22 +102,82 @@ def _canon(a: str, b: str) -> SeedKey:
     return (a, b) if a < b else (b, a)
 
 
+# --------------------------------------------------------------------------- #
+# Canonical, byte-identical cross-language PRG (SPEC-PRG).
+#
+# This is THE one definition of the pairwise-mask randomness. The edge-sdk
+# (edge-sdk/src/secureAgg.ts) and the node re-derive the SAME floats from the
+# SAME 32-byte seed, so a TS-masked update and a Python ``secure_sum`` actually
+# interoperate — the masks cancel because the bytes are identical, not merely
+# "the algebra is similar".
+#
+# Algorithm (HMAC-SHA256 in counter mode):
+#   for counter c = 0, 1, 2, ...:
+#     block = HMAC_SHA256(key=seed, msg=c.to_bytes(8, "big"))   # 32 bytes
+#     split block into four 8-byte little-endian chunks -> uint64
+#     uniform = uint64 / 2**64   in [0, 1)
+#   take the first n uniforms.
+# --------------------------------------------------------------------------- #
+def seed_to_hex(seed_bytes: bytes) -> str:
+    """Represent a 32-byte seed on the wire as 64-char lowercase hex."""
+    if len(seed_bytes) != SEED_BYTES:
+        raise ValueError(f"seed must be {SEED_BYTES} bytes, got {len(seed_bytes)}")
+    return seed_bytes.hex()
+
+
+def hex_to_seed(seed_hex: str) -> bytes:
+    """Decode a 64-char lowercase hex seed back to 32 raw bytes."""
+    b = bytes.fromhex(seed_hex)
+    if len(b) != SEED_BYTES:
+        raise ValueError(f"seed hex must decode to {SEED_BYTES} bytes")
+    return b
+
+
+def prg_floats(seed: bytes, n: int) -> np.ndarray:
+    """Expand a 32-byte seed into ``n`` uniform float64s in [0, 1).
+
+    HMAC-SHA256 counter mode (see module note). Deterministic and byte-identical
+    to the TypeScript ``prgFloats`` in edge-sdk/src/secureAgg.ts — a golden test
+    vector pins this down across both languages.
+    """
+    if n < 0:
+        raise ValueError("n must be non-negative")
+    out = np.empty(n, dtype=np.float64)
+    filled = 0
+    counter = 0
+    inv = float(2 ** 64)
+    while filled < n:
+        block = hmac.new(seed, counter.to_bytes(8, "big"), hashlib.sha256).digest()
+        for j in range(4):
+            if filled >= n:
+                break
+            val = int.from_bytes(block[j * 8 : (j + 1) * 8], "little")
+            out[filled] = val / inv
+            filled += 1
+        counter += 1
+    return out
+
+
 def derive_pairwise_mask(seed_bytes: bytes, dim: int) -> np.ndarray:
     """PRG: expand a shared secret seed into a deterministic mask vector.
 
     Both clients in a pair derive the identical vector from the identical seed.
-    We hash the seed to a fixed 256-bit digest, fold it into a numpy SeedSequence
-    (cryptographically-influenced entropy), and draw ``dim`` large-magnitude
-    floats from a numpy Generator. Deterministic in ``seed_bytes`` and ``dim``.
+    The uniforms come from the canonical byte-identical :func:`prg_floats`
+    (HMAC-SHA256 counter mode), then are mapped onto the zero-centred
+    ``[-_MASK_SCALE, _MASK_SCALE)`` range so the mask dominates any realistic
+    update. Deterministic in ``seed_bytes`` and ``dim``, and byte-for-byte
+    reproducible in the edge-sdk / node.
+
+    ``seed_bytes`` should be 32 raw bytes; shorter/other seeds are hashed to 32
+    bytes first so any caller-supplied seed string still maps to a valid key.
     """
     if dim <= 0:
         raise ValueError("dim must be positive")
-    digest = hashlib.sha256(seed_bytes).digest()
-    # Fold the 32-byte digest into eight uint32 words for the SeedSequence.
-    words = np.frombuffer(digest, dtype=np.uint32)
-    rng = np.random.default_rng(np.random.SeedSequence(list(int(w) for w in words)))
-    # Uniform, zero-centred, large magnitude: dominates any realistic update.
-    return rng.uniform(-_MASK_SCALE, _MASK_SCALE, size=dim)
+    if len(seed_bytes) != SEED_BYTES:
+        seed_bytes = hashlib.sha256(seed_bytes).digest()
+    u = prg_floats(seed_bytes, dim)
+    # Uniform in [0,1) -> zero-centred, large magnitude.
+    return (u * 2.0 - 1.0) * _MASK_SCALE
 
 
 def establish_pairwise_seeds(

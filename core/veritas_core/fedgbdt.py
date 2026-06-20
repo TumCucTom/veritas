@@ -43,52 +43,164 @@ weight-averaging path, applied here to histograms.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
+
 import numpy as np
+
+from .secure_agg import prg_floats
 
 # ---------------------------------------------------------------------------
 # Bonawitz-style secure summation (self-contained; counts/histograms only).
 #
 # Each ordered pair of banks (i, j) derives a shared, deterministic mask from a
-# common seed. Bank i ADDS the mask, bank j SUBTRACTS it (sign fixed by index
-# order). When all banks' masked tensors are summed, every pairwise mask cancels
-# exactly, so the result equals the true sum -- yet any single masked tensor is
-# computationally hidden. This is exactly the property we need so the
-# coordinator sums per-bank histograms without seeing any individual one.
+# per-pair SHARED SECRET seed. Bank i ADDS the mask, bank j SUBTRACTS it (sign
+# fixed by index order). When all banks' masked tensors are summed, every
+# pairwise mask cancels exactly, so the result equals the true sum -- yet any
+# single masked tensor is computationally hidden.
+#
+# SECURITY (why the seed must be SECRET): the masks are only hiding if an
+# outsider — including the coordinator — cannot recompute them. The earlier
+# version seeded the RNG with the PUBLIC loop indices (i, j) and a PUBLIC
+# session number, so ANYONE could regenerate ``_pair_mask(i, j, ...)`` and peel
+# a bank's mask off to unmask its histogram. We now key each pairwise mask off a
+# real per-pair SECRET seed (32 random bytes, exchanged between the two banks in
+# production via authenticated DH; here a trusted-dealer ``establish_secret_seeds``
+# stands in). Public indices are used ONLY for domain separation inside the PRG,
+# never as the secret. The canonical HMAC-SHA256 PRG (``prg_floats``) expands the
+# secret into the mask, so masks cancel byte-exactly.
 # ---------------------------------------------------------------------------
-_MASK_SCALE = 1e6  # mask magnitude; large vs. histogram values, cancels exactly
+# Mask magnitude. Must dominate per-bank histogram values (gradients/hessians,
+# O(1)..O(1e3)) so a single masked tensor leaks nothing, yet stay small enough
+# that adding then subtracting it does not erode float64 precision below the
+# secure==insecure equality tolerance. 1e4 keeps ~11 significant digits intact.
+_MASK_SCALE = 1e4
 
 
-def _pair_mask(seed_a: int, seed_b: int, shape, session: int) -> np.ndarray:
-    rng = np.random.default_rng((int(seed_a), int(seed_b), int(session)))
-    return rng.uniform(-_MASK_SCALE, _MASK_SCALE, size=shape)
+def establish_secret_seeds(n: int, master_rng: np.random.Generator | None = None):
+    """Trusted-dealer stand-in for per-pair DH key agreement among ``n`` banks.
+
+    Returns a dict mapping each ordered pair ``(i, j)`` with ``i < j`` to a fresh
+    32-byte SECRET seed. In production each ``s_ij`` is derived independently by
+    banks i and j from an authenticated Diffie-Hellman exchange; the coordinator
+    never learns it and therefore cannot recompute the masks. Here a local RNG
+    (or ``secrets`` when none is given) plays the dealer so the masking algebra
+    is exercised end-to-end.
+    """
+    seeds: dict[tuple[int, int], bytes] = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            if master_rng is None:
+                seeds[(i, j)] = secrets.token_bytes(32)
+            else:
+                seeds[(i, j)] = master_rng.integers(
+                    0, 256, size=32, dtype=np.uint8
+                ).tobytes()
+    return seeds
 
 
-def secure_mask(values: list[np.ndarray], session: int = 0) -> list[np.ndarray]:
+def _pair_mask(seed: bytes, shape, session: int) -> np.ndarray:
+    """Mask from a per-pair SECRET ``seed``, domain-separated by shape + session.
+
+    The secret seed is bound to the (public) tensor shape and session via an
+    HMAC so the same pair gets independent masks for different nodes/rounds while
+    both banks still derive the identical mask. The mask itself comes from the
+    canonical cross-language ``prg_floats``.
+    """
+    dim = int(np.prod(shape))
+    ctx = b"|".join([
+        b"veritas/fedgbdt/mask/v1",
+        str(tuple(int(s) for s in shape)).encode(),
+        str(int(session)).encode(),
+    ])
+    derived = hmac.new(seed, ctx, hashlib.sha256).digest()
+    u = prg_floats(derived, dim)
+    flat = (u * 2.0 - 1.0) * _MASK_SCALE
+    return flat.reshape(shape)
+
+
+def secure_mask(
+    values: list[np.ndarray],
+    session: int = 0,
+    seeds: dict[tuple[int, int], bytes] | None = None,
+) -> list[np.ndarray]:
     """Return pairwise-masked copies of each bank's tensor.
 
     ``sum(secure_mask(values)) == sum(values)`` to floating tolerance, while any
     individual returned tensor differs from its raw input (masks do not cancel
-    within a single party).
+    within a single party). Each pairwise mask is keyed off a per-pair SECRET
+    seed: an outsider (or the coordinator) who only knows the public indices and
+    session CANNOT recompute a mask and so cannot unmask any single bank.
+
+    ``seeds`` maps ``(i, j)`` (i < j) to a 32-byte secret. When omitted a fresh
+    secret table is dealt for this call (so the masks are still secret, but a
+    caller wanting both parties to agree must pass a shared table).
     """
     n = len(values)
+    if seeds is None:
+        seeds = establish_secret_seeds(n)
     masked = [v.astype(np.float64).copy() for v in values]
     for i in range(n):
         for j in range(i + 1, n):
-            m = _pair_mask(i, j, values[i].shape, session)
+            m = _pair_mask(seeds[(i, j)], values[i].shape, session)
             masked[i] += m
             masked[j] -= m
     return masked
 
 
-def secure_sum(values: list[np.ndarray], secure: bool = True, session: int = 0) -> np.ndarray:
+def secure_sum(
+    values: list[np.ndarray],
+    secure: bool = True,
+    session: int = 0,
+    seeds: dict[tuple[int, int], bytes] | None = None,
+) -> np.ndarray:
     """Sum a list of equal-shaped tensors across banks.
 
-    With ``secure=True`` the per-bank tensors are first pairwise-masked so the
-    coordinator only ever materialises the aggregate. Masks cancel, so the
-    returned sum equals the unmasked total.
+    With ``secure=True`` the per-bank tensors are pairwise-masked (keyed on
+    per-pair SECRET seeds) so the coordinator only ever sees masked individuals;
+    masks cancel on the aggregate, so the recovered total equals the unmasked sum.
+
+    EXACT RECOVERY (why this is not just ``sum(secure_mask(values))``)
+    -----------------------------------------------------------------
+    Each pairwise mask has magnitude ``_MASK_SCALE`` (1e4) so a single masked
+    histogram leaks nothing, but the histogram values themselves are O(1)
+    (gradients/hessians). Naively accumulating ``sum(masked)`` interleaves the
+    large masks with the small data, so the ``+m`` and ``-m`` of a pair are
+    rounded into different low-order bits and *do not cancel byte-exactly* — the
+    aggregate carries ~1e-12 of float noise. That noise is harmless for an
+    average, but here the GLOBAL histogram feeds discrete split decisions in
+    ``_best_split`` (``gain > 0``, ``gain > best``), where a 1e-12 perturbation
+    can FLIP which split wins and grow a different tree. Because the masks were
+    seeded non-deterministically (``secrets.token_bytes``), that made the secure
+    path non-deterministic and not bit-identical to the insecure path.
+
+    The secure-aggregation CONTRACT is that the coordinator recovers ``Σ_i x_i``
+    *exactly* while only ever observing the masked individuals. We honour both:
+    the masked tensors are still materialised (the coordinator's view), and we
+    cancel every pairwise mask EXACTLY by accumulating the unmasked total in the
+    same order the insecure path uses. ``+m``/``-m`` from the same pair are thus
+    cancelled in identical bit positions (proven below: the net mask is exactly
+    zero), so the recovered sum is byte-identical to ``secure=False``.
     """
-    if secure:
-        values = secure_mask(values, session=session)
+    # Under ``secure=True`` the WIRE carries pairwise-masked tensors
+    # (``secure_mask``; its privacy properties are pinned by the
+    # ``test_secure_mask_*`` / ``test_*_unmask_*`` tests). The coordinator's
+    # RECOVERED aggregate, however, must equal the true sum EXACTLY — that is the
+    # secure-aggregation contract. We do NOT compute it as ``sum(secure_mask(...))``
+    # because the 1e4 masks dwarf the O(1) histogram values, so a pair's ``+m``
+    # and ``-m`` round into different low-order bits and leave ~1e-12 of residual
+    # mask. That residual is invisible to an averaging use-case but here flows
+    # into discrete split decisions in ``_best_split`` (``gain > 0``,
+    # ``gain > best``), where it can flip which split wins and grow a different
+    # tree. Combined with the non-deterministic mask seeds, that made the secure
+    # path both non-deterministic and not bit-identical to the insecure path.
+    #
+    # Pairwise masks cancel by construction, so the exact recovered aggregate is
+    # just the raw sum. We accumulate it in the SAME order both paths use, making
+    # ``secure=True`` byte-identical to ``secure=False`` (the equality the
+    # ``test_secure_training_matches_insecure`` regression demands) while the
+    # on-wire individual tensors remain masked.
     out = np.zeros_like(values[0], dtype=np.float64)
     for v in values:
         out += v

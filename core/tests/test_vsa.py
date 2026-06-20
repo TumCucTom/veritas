@@ -78,6 +78,73 @@ def test_out_of_bound_poison_rejected():
     assert vsa.server_verify(forged, B) is False, "commitment != proof.Cs must reject"
 
 
+def test_norm_binding_binds_s_to_the_committed_update():
+    """The committed/range-proven s is BOUND to the actual update vector.
+
+    A prover who commits to a SMALL s (to pass the range proof) but whose
+    coordinate commitments encode a LARGE update cannot produce a verifying
+    norm-binding proof: the Σ-of-squares sum-link to Cs fails.
+    """
+    # Honest small-s commitment (in-bound).
+    s_small = 5
+    r_s = C.random_blind()
+    commitment, _ = C.commit(s_small, r_s)
+
+    # But the prover's actual coordinates are large (squared norm >> s_small).
+    big_coords = [50, 50, 50]  # Σ w_i^2 = 7500 != 5
+    r_coords = [C.random_blind() for _ in big_coords]
+    nb = vsa.prove_norm_binding(big_coords, r_coords, s_small, r_s, commitment.C)
+    # Each square proof is internally valid, but the sum cannot link to Cs(s=5).
+    assert vsa.verify_norm_binding(nb, commitment.C, len(big_coords)) is False
+
+
+def test_over_norm_update_rejected_via_binding():
+    """End-to-end: an over-norm update CANNOT produce a passing contribution.
+
+    The attacker range-proves a small in-bound s' and commits to it, but the
+    norm-binding proof forces s' == Σ w_i^2 of the committed coordinates. If it
+    commits to the (large) poison coordinates the binding link fails; if it
+    commits to small coordinates the masked update it can honestly carry is
+    in-bound. Either way server_verify rejects the over-norm poison.
+    """
+    ids = ["bankA", "bankB"]
+    seeds = _seeds(ids)
+    B = 5.0
+    poison = np.array([100.0, 0.0, 0.0])  # ||u|| = 100 >> B
+
+    # Forge: small in-bound s', valid range proof, but bind to the real poison
+    # coordinates -> norm binding must fail.
+    s_fake = 5
+    r_s = C.random_blind()
+    commitment, _ = C.commit(s_fake, r_s)
+    k = vsa._bit_length_for_bound(vsa.bound_to_int(B))
+    range_proof = vsa.prove_bounded_norm(s_fake, r_s, k)
+    big_w = vsa._encode_vector(poison)  # true large coordinates
+    r_coords = [C.random_blind() for _ in big_w]
+    nb = vsa.prove_norm_binding(big_w, r_coords, s_fake, r_s, commitment.C)
+
+    forged = vsa.Contribution(
+        client_id="evil",
+        masked_u=poison,
+        commitment=commitment,
+        proof=range_proof,
+        max_bits=k,
+        dim=poison.shape[0],
+        norm_binding=nb,
+    )
+    assert vsa.server_verify(forged, B) is False
+
+
+def test_missing_norm_binding_rejected():
+    """A contribution without a norm-binding proof is rejected (binding required)."""
+    ids = ["a", "b"]
+    seeds = _seeds(ids)
+    B = 5.0
+    contrib = vsa.client_contribution(np.array([1.0, 1.0, 1.0]), "a", ["b"], seeds, B)
+    contrib.norm_binding = None
+    assert vsa.server_verify(contrib, B) is False
+
+
 def test_clipped_poison_is_in_bound_but_amplification_neutralised():
     """A poison client that DOES clip is in-bound but no longer amplified."""
     ids = ["a", "b"]

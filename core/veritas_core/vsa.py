@@ -109,20 +109,37 @@ from . import secure_agg
 from . import dp as _dp
 
 
-# Fixed-point scale: we range-prove s = round(SCALE * ||u||^2). A larger scale
-# keeps more fractional precision of the (DP-noised) squared norm. The same scale
-# must be used for the bound B (see bound_to_int).
-SCALE = 1_000_000
+# Fixed-point scale: we range-prove s = SCALE * ||u||^2. A larger scale keeps
+# more fractional precision of the (DP-noised) squared norm. The same scale must
+# be used for the bound B (see bound_to_int).
+#
+# To BIND s to the actual update vector we encode each coordinate as the integer
+# w_i = round(CSCALE * u_i) and define s = Σ w_i^2. Because CSCALE^2 == SCALE,
+# this is exactly the fixed-point squared norm (with rounding applied per
+# coordinate). The per-coordinate integers w_i are what the norm-binding proof
+# squares-and-sums, so the committed/range-proven s provably equals the squared
+# norm of the *committed* update — a poison cannot commit to a small s while
+# carrying a large update.
+CSCALE = 1_000               # per-coordinate fixed-point scale
+SCALE = CSCALE * CSCALE      # = 1_000_000, scale on the squared norm
+
+
+def _encode_vector(u: np.ndarray) -> List[int]:
+    """Encode each update coordinate as an integer w_i = round(CSCALE * u_i)."""
+    arr = np.asarray(u, dtype=np.float64).ravel()
+    return [int(round(CSCALE * float(x))) for x in arr]
 
 
 # --------------------------------------------------------------------------- #
 # Fixed-point encoding helpers.
 # --------------------------------------------------------------------------- #
 def squared_norm_to_int(u: np.ndarray) -> int:
-    """Encode ||u||^2 as a non-negative integer in fixed point (SCALE units)."""
-    s = float(np.dot(np.asarray(u, dtype=np.float64).ravel(),
-                     np.asarray(u, dtype=np.float64).ravel()))
-    return int(round(max(0.0, s) * SCALE))
+    """Encode ||u||^2 as a non-negative integer in fixed point (SCALE units).
+
+    Computed as Σ round(CSCALE * u_i)^2 so it is byte-for-byte the quantity the
+    norm-binding proof certifies over the committed vector coordinates.
+    """
+    return sum(w * w for w in _encode_vector(u))
 
 
 def bound_to_int(B: float) -> int:
@@ -265,6 +282,80 @@ def _verify_link(lp: LinkProof, T_expected: int, extra: bytes) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Squared-value proof: given Cx = g^x h^{rx} and Cy = g^{x^2} h^{ry}, prove in
+# zero knowledge that Cy commits to the SQUARE of the value committed in Cx.
+#
+# Note Cx^x = g^{x^2} h^{x rx}. So Cy * Cx^{-x} = h^{ry - x rx} = h^{d}. We prove
+# knowledge of (x, rx, d) such that:   Cx = g^x h^{rx}   AND   Cy = Cx^x h^{d}.
+# This is an AND of two sigma protocols sharing the witness x (a standard
+# Chaum-Pedersen-style equality-of-exponent proof), made non-interactive by
+# Fiat-Shamir. Soundness rests on discrete log: a prover who does not know an x
+# with y = x^2 cannot satisfy both relations except with negligible probability.
+# --------------------------------------------------------------------------- #
+@dataclass
+class SquareProof:
+    Cx: int     # commitment to x
+    Cy: int     # commitment to y = x^2
+    A1: int     # first-round commitment for Cx = g^x h^{rx}
+    A2: int     # first-round commitment for Cy = Cx^x h^{d}
+    e: int      # FS challenge
+    zx: int     # response for x
+    zrx: int    # response for rx
+    zd: int     # response for d
+
+
+def _prove_square(x: int, rx: int, ry: int, extra: bytes) -> SquareProof:
+    xq = x % Q
+    Cx = (pow(G, xq, P) * pow(H, rx % Q, P)) % P
+    y = (xq * xq) % Q
+    Cy = (pow(G, y, P) * pow(H, ry % Q, P)) % P
+    d = (ry - xq * (rx % Q)) % Q  # so Cy = Cx^x * h^d
+
+    kx = secrets.randbelow(Q)
+    krx = secrets.randbelow(Q)
+    kd = secrets.randbelow(Q)
+    A1 = (pow(G, kx, P) * pow(H, krx, P)) % P   # commit for Cx relation
+    A2 = (pow(Cx, kx, P) * pow(H, kd, P)) % P   # commit for Cy = Cx^x h^d
+    e = _fs_challenge(extra, _i2b(Cx), _i2b(Cy), _i2b(A1), _i2b(A2))
+    zx = (kx + e * xq) % Q
+    zrx = (krx + e * (rx % Q)) % Q
+    zd = (kd + e * d) % Q
+    return SquareProof(Cx=Cx, Cy=Cy, A1=A1, A2=A2, e=e, zx=zx, zrx=zrx, zd=zd)
+
+
+def _verify_square(sp: SquareProof, extra: bytes) -> bool:
+    e = _fs_challenge(extra, _i2b(sp.Cx), _i2b(sp.Cy), _i2b(sp.A1), _i2b(sp.A2))
+    if e != sp.e:
+        return False
+    # Cx relation: g^{zx} h^{zrx} == A1 * Cx^e
+    lhs1 = (pow(G, sp.zx % Q, P) * pow(H, sp.zrx % Q, P)) % P
+    rhs1 = (sp.A1 * pow(sp.Cx, e % Q, P)) % P
+    if lhs1 != rhs1:
+        return False
+    # Cy relation: Cx^{zx} h^{zd} == A2 * Cy^e
+    lhs2 = (pow(sp.Cx, sp.zx % Q, P) * pow(H, sp.zd % Q, P)) % P
+    rhs2 = (sp.A2 * pow(sp.Cy, e % Q, P)) % P
+    return lhs2 == rhs2
+
+
+# --------------------------------------------------------------------------- #
+# Norm-binding proof: bind the committed squared-norm Cs to the ACTUAL update.
+#
+# The client commits to each encoded coordinate w_i (Cx_i), and to each square
+# w_i^2 (Cy_i) with a SquareProof tying Cy_i to Cx_i. The homomorphic product
+# prod_i Cy_i commits to Σ w_i^2 = s. We then prove (Schnorr on h) that this
+# product equals Cs up to a blinding offset, binding the range-proven s to the
+# squared norm of the committed coordinates. A poison whose true encoded norm is
+# large therefore cannot commit to (and range-prove) a small s: the square
+# proofs + the sum link force s = Σ w_i^2.
+# --------------------------------------------------------------------------- #
+@dataclass
+class NormBindingProof:
+    squares: List[SquareProof]   # one (Cx_i, Cy_i) square proof per coordinate
+    link: "LinkProof"            # prod_i Cy_i  ==  Cs * h^{offset}
+
+
+# --------------------------------------------------------------------------- #
 # Bounded-norm range proof.
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -348,6 +439,62 @@ def verify_bounded_norm(proof: RangeProof, max_bits: int) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Norm-binding prove / verify.
+# --------------------------------------------------------------------------- #
+def _norm_binding_prefix(Cs: int, dim: int) -> bytes:
+    return b"|".join([
+        b"veritas/vsa/normbind/v1",
+        _i2b(G), _i2b(H), _i2b(Cs), str(dim).encode(),
+    ])
+
+
+def prove_norm_binding(
+    w: Sequence[int], r_coords: Sequence[int], s: int, r_s: int, Cs: int
+) -> NormBindingProof:
+    """Prove the committed s == Σ w_i^2 for the committed coordinates w_i.
+
+    ``Cs = g^s h^{r_s}`` is the (already-built) commitment to the squared norm.
+    For each coordinate we build Cx_i = g^{w_i} h^{r_coords[i]} and a SquareProof
+    binding Cy_i to w_i^2. The homomorphic product prod_i Cy_i commits to Σ w_i^2
+    with blind Σ ry_i; we Schnorr-prove it equals Cs up to an h-offset.
+    """
+    dim = len(w)
+    prefix = _norm_binding_prefix(Cs, dim)
+    squares: List[SquareProof] = []
+    R_y = 0
+    for i in range(dim):
+        rx = r_coords[i] % Q
+        ry = secrets.randbelow(Q)
+        R_y = (R_y + ry) % Q
+        sp = _prove_square(w[i], rx, ry, extra=prefix + f"|sq{i}".encode())
+        squares.append(sp)
+
+    # prod_i Cy_i = g^{Σ w_i^2} h^{R_y} = g^s h^{R_y}.  Cs = g^s h^{r_s}.
+    # => (prod Cy_i) * Cs^{-1} = h^{R_y - r_s} = h^delta.
+    prod = 1
+    for sp in squares:
+        prod = (prod * sp.Cy) % P
+    delta = (R_y - (r_s % Q)) % Q
+    T = (prod * pow(Cs, -1, P)) % P
+    link = _prove_link(delta, T, extra=prefix + b"|sumlink")
+    return NormBindingProof(squares=squares, link=link)
+
+
+def verify_norm_binding(nb: NormBindingProof, Cs: int, dim: int) -> bool:
+    """Verify every square proof and that Σ-of-squares commitment links to Cs."""
+    if len(nb.squares) != dim:
+        return False
+    prefix = _norm_binding_prefix(Cs, dim)
+    prod = 1
+    for i, sp in enumerate(nb.squares):
+        if not _verify_square(sp, extra=prefix + f"|sq{i}".encode()):
+            return False
+        prod = (prod * sp.Cy) % P
+    T_expected = (prod * pow(Cs, -1, P)) % P
+    return _verify_link(nb.link, T_expected, extra=prefix + b"|sumlink")
+
+
+# --------------------------------------------------------------------------- #
 # The VSA protocol: client contribution + server verification + aggregation.
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -360,6 +507,7 @@ class Contribution:
     proof: RangeProof               # ZK proof that s <= B (bounded norm)
     max_bits: int                   # k implied by the public bound B
     dim: int                        # update dimension (public)
+    norm_binding: Optional[NormBindingProof] = None  # binds s to the committed update
     # NOTE: r_s / opening are NOT included — the server never gets the opening.
 
 
@@ -403,8 +551,11 @@ def client_contribution(
         u_priv = _dp.clip_update(u, cnorm)
     u_priv = np.asarray(u_priv, dtype=np.float64)
 
-    # (b) commit to the (scaled) squared norm.
-    s = squared_norm_to_int(u_priv)
+    # (b) encode the update coordinate-wise and commit to the squared norm
+    # s = Σ w_i^2 (so s is BOUND to the actual update vector, not arbitrary).
+    w = _encode_vector(u_priv)
+    s = sum(wi * wi for wi in w)
+    assert s == squared_norm_to_int(u_priv)
     b_int = bound_to_int(B)
     k = _bit_length_for_bound(b_int)
     # If an honest client's s overflows k bits (e.g. noise pushed it over B),
@@ -423,6 +574,12 @@ def client_contribution(
     # Sanity: proof's Cs must equal the standalone commitment.
     assert proof.Cs == commitment.C
 
+    # (c2) norm-binding proof: prove s == Σ w_i^2 over per-coordinate
+    # commitments, so a client CANNOT commit to a small s unrelated to a large
+    # update. This is what makes the bounded-norm guarantee bind to the update.
+    r_coords = [_commit.random_blind() for _ in range(dim)]
+    norm_binding = prove_norm_binding(w, r_coords, s, r_s, commitment.C)
+
     # (d) Bonawitz mask.
     masked_u = secure_agg.mask_update(u_priv, client_id, list(peer_ids), seed_table)
 
@@ -433,6 +590,7 @@ def client_contribution(
         proof=proof,
         max_bits=k,
         dim=dim,
+        norm_binding=norm_binding,
     )
 
 
@@ -441,7 +599,9 @@ def server_verify(contribution: Contribution, B: float) -> bool:
 
     Recomputes the bit-length k implied by the public bound B and verifies the
     range proof binds to the contribution's commitment. Returns True iff the
-    client proved ``||u'||^2 <= B`` soundly.
+    client proved ``||u'||^2 <= B`` soundly AND the committed/range-proven s is
+    bound (via the norm-binding proof) to the squared norm of the committed
+    update — so an over-norm update cannot pass with a small forged s.
     """
     b_int = bound_to_int(B)
     k = _bit_length_for_bound(b_int)
@@ -451,7 +611,16 @@ def server_verify(contribution: Contribution, B: float) -> bool:
     # The prover must not claim more bits than B allows.
     if contribution.proof.k > k:
         return False
-    return verify_bounded_norm(contribution.proof, max_bits=k)
+    if not verify_bounded_norm(contribution.proof, max_bits=k):
+        return False
+    # The norm-binding proof is REQUIRED: it certifies s == Σ w_i^2 over the
+    # committed coordinates, so the bounded-norm guarantee actually binds to the
+    # submitted update rather than an arbitrary committed value.
+    if contribution.norm_binding is None:
+        return False
+    return verify_norm_binding(
+        contribution.norm_binding, contribution.commitment.C, contribution.dim
+    )
 
 
 def verifiable_secure_aggregate(

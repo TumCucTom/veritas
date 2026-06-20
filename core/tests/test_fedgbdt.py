@@ -2,6 +2,7 @@ import numpy as np
 
 from veritas_core.fedgbdt import (
     fed_train_gbdt, predict_proba, recall, secure_sum, secure_mask,
+    establish_secret_seeds, _pair_mask,
 )
 from veritas_core import model as logmodel
 
@@ -67,6 +68,52 @@ def test_secure_mask_hides_individual_but_sums_true():
     assert np.allclose(agg, true_total, atol=1e-6)
     # and the masked stack still sums to the true total
     assert np.allclose(sum(masked), true_total, atol=1e-6)
+
+
+def test_masks_keyed_off_secret_not_public_indices():
+    """An attacker who knows ONLY the public indices/session/shape cannot
+    recompute a pairwise mask: the mask is keyed off a per-pair SECRET seed.
+
+    This is the security property the old (public-index-seeded) implementation
+    violated — anyone could regenerate _pair_mask(i, j, session) and unmask a
+    single bank's histogram.
+    """
+    shape = (3, 16)
+    session = 42
+    seeds = establish_secret_seeds(2)
+    real = _pair_mask(seeds[(0, 1)], shape, session)
+
+    # Attacker tries to forge the mask from public info only (guessing the
+    # secret). A different secret yields a totally different mask.
+    forged = _pair_mask(b"\x00" * 32, shape, session)
+    assert not np.allclose(real, forged)
+
+    # Two independently-dealt secret tables disagree -> the mask is not a
+    # deterministic function of the public (indices, session, shape).
+    other = establish_secret_seeds(2)
+    real2 = _pair_mask(other[(0, 1)], shape, session)
+    assert not np.allclose(real, real2)
+
+
+def test_single_party_cannot_unmask_another():
+    """Masks cancel in aggregate, but a single party (or the coordinator) cannot
+    peel another party's mask without that pair's secret seed."""
+    rng = np.random.default_rng(3)
+    raw = [rng.normal(0, 1, (3, 16)) for _ in range(3)]
+    seeds = establish_secret_seeds(3, master_rng=np.random.default_rng(9))
+    masked = secure_mask(raw, session=7, seeds=seeds)
+
+    # Aggregate cancels to the true total.
+    assert np.allclose(sum(masked), sum(raw), atol=1e-6)
+
+    # Bank 2 holds only the seeds for pairs that include itself: (0,2) and (1,2).
+    # It does NOT know (0,1), so it cannot reconstruct the mask hiding bank 0
+    # from bank 1, and thus cannot recover bank 0's or bank 1's raw histogram.
+    assert (0, 1) in seeds  # exists in the dealer table...
+    # ...but a party lacking it cannot regenerate that mask:
+    guess = _pair_mask(b"\x11" * 32, raw[0].shape, 7)
+    # subtracting a wrong guess does not reveal bank 0's raw tensor
+    assert not np.allclose(masked[0] - guess, raw[0], atol=1e-3)
 
 
 def test_secure_training_matches_insecure():
