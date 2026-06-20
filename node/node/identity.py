@@ -12,7 +12,9 @@ the verifier. This keeps enrolment a one-time public-key registration.
 """
 from __future__ import annotations
 
+import os
 import time
+import uuid
 
 import jwt  # PyJWT
 from cryptography.hazmat.primitives import serialization
@@ -62,14 +64,26 @@ class NodeIdentity:
 
     # ---- JWT -------------------------------------------------------------
 
-    def mint_jwt(self, ttl_seconds: int = 3600) -> str:
-        """Mint an EdDSA-signed JWT the plane verifies against the registered key."""
+    def mint_jwt(self, ttl_seconds: int | None = None) -> str:
+        """Mint an EdDSA-signed JWT the plane verifies against the registered key.
+
+        The token carries ``aud``/``iss`` (so it can only be redeemed against this
+        control plane) and a unique ``jti`` — matching what the hardened plane's
+        ``verify_member_jwt`` now *requires*. Defaults mirror the plane
+        (``VERITAS_JWT_AUD``/``VERITAS_JWT_ISS``/``VERITAS_JWT_TTL``) so a single
+        env scopes both sides per-fleet.
+        """
+        if ttl_seconds is None:
+            ttl_seconds = int(os.environ.get("VERITAS_JWT_TTL", "300"))
         now = int(time.time())
         claims = {
             "sub": self.member_id,
             "tid": self.tenant_id,
             "iat": now,
             "exp": now + ttl_seconds,
+            "aud": os.environ.get("VERITAS_JWT_AUD", "veritas-control-plane"),
+            "iss": os.environ.get("VERITAS_JWT_ISS", "veritas-node"),
+            "jti": uuid.uuid4().hex,
         }
         # PyJWT serialises the Ed25519 private key object directly for EdDSA.
         return jwt.encode(claims, self._sk, algorithm="EdDSA")
@@ -77,6 +91,18 @@ class NodeIdentity:
     @staticmethod
     def verify_jwt(token: str, public_key_pem: str) -> dict:
         """Verify a node JWT against a registered public key (the plane's job;
-        provided here so the in-memory fake plane and tests share one impl)."""
+        provided here so the in-memory fake plane and tests share one impl).
+
+        Mirrors controlplane.crypto.verify_member_jwt: verifies signature,
+        expiry, and the aud/iss binding, and requires the full claim set, so the
+        fake plane enforces exactly what the real plane does.
+        """
         pk = serialization.load_pem_public_key(public_key_pem.encode())
-        return jwt.decode(token, pk, algorithms=["EdDSA"])
+        return jwt.decode(
+            token,
+            pk,
+            algorithms=["EdDSA"],
+            audience=os.environ.get("VERITAS_JWT_AUD", "veritas-control-plane"),
+            issuer=os.environ.get("VERITAS_JWT_ISS", "veritas-node"),
+            options={"require": ["sub", "tid", "exp", "aud", "iss", "jti"]},
+        )
