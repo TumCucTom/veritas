@@ -49,6 +49,23 @@ export default function EdgeFleetPanel() {
         <SourceBadge isLive={isLive} />
       </header>
 
+      {!isLive && (
+        <div
+          className="mb-4 flex items-center gap-2 rounded-[11px] border px-3 py-2 text-[11px] leading-snug"
+          style={{
+            borderColor: "var(--border-default)",
+            background: "var(--bg-surface-2)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: "var(--accent-gold)" }} />
+          <span>
+            <span className="font-semibold text-text-primary">Illustrative — representative figures.</span>{" "}
+            Not live data from the control plane.
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[14px] border"
         style={{ borderColor: "var(--border-default)", background: "var(--border-default)" }}>
         <Metric
@@ -104,8 +121,8 @@ export default function EdgeFleetPanel() {
         {isLive
           ? "Live Tier-0 coverage from this tenant’s node."
           : status === "offline"
-            ? "Control plane offline · representative coverage shown — not live figures."
-            : "Representative coverage · the control plane does not yet expose Tier-0 fleet metrics for this tenant."}
+            ? "Control plane offline · illustrative coverage shown — representative figures, not live data."
+            : "Illustrative coverage · representative figures shown because the control plane does not yet expose Tier-0 fleet metrics for this tenant."}
       </p>
     </section>
   );
@@ -145,7 +162,7 @@ function SourceBadge({ isLive }: { isLive: boolean }) {
     >
       <span aria-hidden className="h-1.5 w-1.5 rounded-full"
         style={{ background: isLive ? "var(--fed)" : "var(--accent-gold)" }} />
-      {isLive ? "live" : "representative"}
+      {isLive ? "live" : "illustrative"}
     </span>
   );
 }
