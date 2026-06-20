@@ -12,6 +12,9 @@ import AttackBanner from "../components/AttackBanner";
 import ProvenancePanel from "../components/ProvenancePanel";
 import GovernancePanel from "../components/GovernancePanel";
 import EdgeFleetPanel from "../components/EdgeFleetPanel";
+import EmbeddingAtlas from "../components/EmbeddingAtlas";
+import MuleGraph from "../components/MuleGraph";
+import FederationPulse from "../components/FederationPulse";
 
 export default function Home() {
   return (
@@ -36,6 +39,25 @@ export default function Home() {
           </div>
 
           <BankStrip />
+
+          <section className="flex flex-col gap-5">
+            <div className="flex flex-col gap-1">
+              <p className="eyebrow text-accent-gold">Under the hood · live from the models</p>
+              <h2 className="font-display text-[clamp(1.5rem,1.1rem+1.4vw,2.1rem)] leading-tight tracking-tight text-text-primary">
+                What federation actually does to the models.
+              </h2>
+              <p className="mt-1 max-w-2xl text-[14px] leading-relaxed text-text-secondary">
+                Every frame below is precomputed from the real Veritas models — the learned
+                embedding space, the cross-bank GraphSAGE GNN, and one secure-aggregation round —
+                not mock-ups.
+              </p>
+            </div>
+            <EmbeddingAtlas />
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <MuleGraph />
+              <FederationPulse />
+            </div>
+          </section>
 
           <GovernancePanel />
 
