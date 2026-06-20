@@ -6,6 +6,7 @@ import BankStrip from "../components/BankStrip";
 import Inspector from "../components/Inspector";
 import PrivacyBadge from "../components/PrivacyBadge";
 import AttackBanner from "../components/AttackBanner";
+import ProvenancePanel from "../components/ProvenancePanel";
 
 export default function Home() {
   return (
@@ -28,6 +29,8 @@ export default function Home() {
           <Manifesto />
           <Inspector />
         </div>
+
+        <ProvenancePanel />
 
         <SiteFooter />
       </div>

@@ -28,6 +28,12 @@ export interface State {
   attackActive: boolean;
   customerRecordsTransmitted: number;
 }
+export interface Provenance {
+  round: number;
+  contributors: string[];
+  rejected: string[];
+  globalRecall: number;
+}
 export type Regime = "federated" | "siloed";
 export type VeritasEvent =
   | { type: "round_complete"; data: State }

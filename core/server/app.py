@@ -16,6 +16,8 @@ def _pub(events):
 def state(): return engine.state()
 @app.get("/banks")
 def banks(): return engine.state()["banks"]
+@app.get("/provenance")
+def provenance(): return engine.provenance
 @app.post("/campaign/inject")
 def campaign(body:dict): engine.inject_campaign(); _pub([{"type":"round_complete","data":engine.state()}]); return {"ok":True}
 @app.post("/attack/inject")

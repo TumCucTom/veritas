@@ -39,6 +39,10 @@ class Engine:
         self.seen = [False] * n_banks
         self.cum = {"fed": 0.0, "silo": 0.0}
         self._rejected_ever = False; self._attack_announced = False
+        # Model bill-of-materials: per-round provenance of which members were
+        # FedAvg'd into the global model and which (poisoned) update was dropped.
+        # In production each record would be anchored on FLock on-chain attestation.
+        self.provenance = []
 
     def inject_campaign(self):
         """Start the scam campaign: every bank's customers are now TARGETED
@@ -89,6 +93,18 @@ class Engine:
             X, y = self.data[i]
             self.silo_w[i] = train_local(self.silo_w[i], X, y, epochs=EPOCHS, lr=0.3)
         fed, silo = self._det()
+        # Record this round's bill-of-materials: every member FedAvg'd into the
+        # global model (contributors) vs the dropped poisoned update (rejected),
+        # plus the resulting mean federated recall. Derived from the SAME Krum
+        # selection used in aggregation — no parallel code path.
+        dropped = [rejected] if rejected is not None else []
+        included = [i for i in range(self.n) if i not in dropped]
+        self.provenance.append({
+            "round": self.round,
+            "contributors": [f"bank{i}" for i in included],
+            "rejected": [f"bank{i}" for i in dropped],
+            "globalRecall": round(sum(fed) / self.n, 3),
+        })
         # Announce the rejected malicious member only once its updates have been
         # filtered AND the global model has demonstrably recovered, so the demo's
         # "attack rejected -> model still healthy" beat lands on a protected state.

@@ -3,6 +3,7 @@ export interface Bank { id: string; name: string; customers: number; detection: 
 export interface RegimeCounters { fraudPreventedGbp: number; timeToDetectHours: number; victims: number; lostGbp: number; }
 export interface Counters { federated: RegimeCounters; siloed: RegimeCounters; }
 export interface State { round: number; running: boolean; banks: Bank[]; counters: Counters; campaignActive: boolean; attackActive: boolean; customerRecordsTransmitted: number; }
+export interface Provenance { round: number; contributors: string[]; rejected: string[]; globalRecall: number; }
 export type Regime = "federated" | "siloed";
 export type VeritasEvent =
   | { type: "round_complete"; data: State }

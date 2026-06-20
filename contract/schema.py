@@ -18,3 +18,11 @@ class Counters(BaseModel):
 class State(BaseModel):
     round: int; running: bool; banks: list[Bank]; counters: Counters
     campaignActive: bool; attackActive: bool; customerRecordsTransmitted: int = 0
+
+class Provenance(BaseModel):
+    """Per-round model bill-of-materials: members FedAvg'd into the global model
+    vs the dropped poisoned update, and the resulting mean federated recall."""
+    round: int
+    contributors: list[str]
+    rejected: list[str] = []
+    globalRecall: float
