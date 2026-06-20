@@ -23,6 +23,7 @@ dist/
 # Data / artifacts
 data/
 *.csv
+!node/sample_data/*.csv
 *.parquet
 models/
 *.pt

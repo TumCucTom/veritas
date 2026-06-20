@@ -1,0 +1,27 @@
+{
+  "name": "@veritas/edge-sdk",
+  "version": "0.1.0",
+  "description": "Veritas Tier 0 Edge SDK — on-device, cross-device federated fraud intelligence. Raw events never leave the device; only DP-protected model updates do.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "demo": "tsx demo/demo.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

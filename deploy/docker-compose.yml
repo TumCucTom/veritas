@@ -1,0 +1,99 @@
+# Veritas federation — control plane + 4 bank nodes.
+#
+#   cd deploy && docker compose up --build
+#
+# Brings up:
+#   controlplane  -> http://localhost:9000   (Tier 2)
+#   node0..node3  -> http://localhost:8100..8103  (Tier 1)
+#
+# Build context is the REPO ROOT (`..`) so the images can COPY ./core alongside
+# ./controlplane and ./node (both install `veritas_core` editable).
+#
+# Nodes enrol on startup as `pending`. Approve them to start federating:
+#   for m in node0 node1 node2 node3; do \
+#     curl -s -X POST -H "X-Admin-Key: dev-admin-key" \
+#       http://localhost:9000/v1/members/$m/approve; done
+#
+# Then drive/verify the federation end-to-end (from the host, against :9000):
+#   controlplane/.venv/bin/python deploy/e2e.py
+#
+# node3 is launched as the "blind" bank (campaign-free synthetic training via a
+# non-existent feature map) so deploy/e2e.py can prove the federated-vs-siloed
+# lift. Remove that env line for a uniform 4-node fleet.
+services:
+  controlplane:
+    build:
+      context: ..
+      dockerfile: controlplane/Dockerfile
+    image: veritas-controlplane
+    environment:
+      VERITAS_ADMIN_KEY: dev-admin-key
+      # Raise so aggregation is driven explicitly via POST /v1/rounds/advance
+      # (what e2e.py does). Set to 3 for nodes to auto-aggregate on their own.
+      VERITAS_MIN_UPDATES: "99"
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health').status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  node0:
+    build: { context: .., dockerfile: node/Dockerfile }
+    image: veritas-node
+    depends_on:
+      controlplane: { condition: service_healthy }
+    environment:
+      VERITAS_NODE_ID: node0
+      VERITAS_NODE_INDEX: "0"
+      VERITAS_PORT: "8100"
+      VERITAS_PLANE_URL: http://controlplane:9000
+      VERITAS_ADMIN_KEY: dev-admin-key
+      VERITAS_AUTOSTART_FEDERATION: "0"
+    ports: ["8100:8100"]
+
+  node1:
+    build: { context: .., dockerfile: node/Dockerfile }
+    image: veritas-node
+    depends_on:
+      controlplane: { condition: service_healthy }
+    environment:
+      VERITAS_NODE_ID: node1
+      VERITAS_NODE_INDEX: "1"
+      VERITAS_PORT: "8101"
+      VERITAS_PLANE_URL: http://controlplane:9000
+      VERITAS_ADMIN_KEY: dev-admin-key
+      VERITAS_AUTOSTART_FEDERATION: "0"
+    ports: ["8101:8101"]
+
+  node2:
+    build: { context: .., dockerfile: node/Dockerfile }
+    image: veritas-node
+    depends_on:
+      controlplane: { condition: service_healthy }
+    environment:
+      VERITAS_NODE_ID: node2
+      VERITAS_NODE_INDEX: "2"
+      VERITAS_PORT: "8102"
+      VERITAS_PLANE_URL: http://controlplane:9000
+      VERITAS_ADMIN_KEY: dev-admin-key
+      VERITAS_AUTOSTART_FEDERATION: "0"
+    ports: ["8102:8102"]
+
+  node3:
+    build: { context: .., dockerfile: node/Dockerfile }
+    image: veritas-node
+    depends_on:
+      controlplane: { condition: service_healthy }
+    environment:
+      VERITAS_NODE_ID: node3
+      VERITAS_NODE_INDEX: "3"
+      VERITAS_PORT: "8103"
+      VERITAS_PLANE_URL: http://controlplane:9000
+      VERITAS_ADMIN_KEY: dev-admin-key
+      VERITAS_AUTOSTART_FEDERATION: "0"
+      # Blind bank: campaign-free synthetic training (non-existent feature map
+      # -> synthetic fallback) so e2e.py can demonstrate the federated lift.
+      VERITAS_FEATURE_MAP: /nonexistent/veritas-blind-node.yaml
+    ports: ["8103:8103"]

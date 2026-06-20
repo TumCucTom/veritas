@@ -1,0 +1,32 @@
+[project]
+name = "veritas-node"
+version = "0.1.0"
+description = "Veritas Tier 1 Bank Node — one bank's local trainer + federation client + connector runtime + edge aggregator."
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "sse-starlette>=2.1",
+    "pydantic>=2.7",
+    "numpy>=2.1",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "cryptography>=42.0",
+    "pyjwt[crypto]>=2.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "anyio>=4.0"]
+lxml = ["lxml>=5.0"]
+
+[tool.setuptools]
+packages = [
+    "node",
+    "node.connectors",
+    "node.server",
+    "node.federation",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"

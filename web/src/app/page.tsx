@@ -1,4 +1,5 @@
 import { VeritasProvider } from "../lib/store";
+import { ControlPlaneProvider } from "../lib/controlPlaneStore";
 import Controls from "../components/Controls";
 import HeroCounters from "../components/HeroCounters";
 import RacePanel from "../components/RacePanel";
@@ -7,33 +8,46 @@ import Inspector from "../components/Inspector";
 import PrivacyBadge from "../components/PrivacyBadge";
 import AttackBanner from "../components/AttackBanner";
 import ProvenancePanel from "../components/ProvenancePanel";
+import GovernancePanel from "../components/GovernancePanel";
+import EdgeFleetPanel from "../components/EdgeFleetPanel";
 
 export default function Home() {
   return (
+    // Two coexisting data sources: VeritasProvider reads the bank NODE (Tier 1,
+    // NEXT_PUBLIC_API_BASE) for the live race / hero / inspector;
+    // ControlPlaneProvider reads the federation CONTROL PLANE (Tier 2,
+    // NEXT_PUBLIC_CONTROL_PLANE) for governance / provenance / edge fleet.
     <VeritasProvider>
-      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-5 py-7 sm:px-8 sm:py-10">
-        <SiteHeader />
+      <ControlPlaneProvider>
+        <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-5 py-7 sm:px-8 sm:py-10">
+          <SiteHeader />
 
-        <Controls />
-        <AttackBanner />
-        <HeroCounters />
+          <Controls />
+          <AttackBanner />
+          <HeroCounters />
 
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <RacePanel regime="siloed" />
-          <RacePanel regime="federated" />
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <RacePanel regime="siloed" />
+            <RacePanel regime="federated" />
+          </div>
+
+          <BankStrip />
+
+          <GovernancePanel />
+
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.4fr_1fr]">
+            <Manifesto />
+            <Inspector />
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <ProvenancePanel />
+            <EdgeFleetPanel />
+          </div>
+
+          <SiteFooter />
         </div>
-
-        <BankStrip />
-
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.4fr_1fr]">
-          <Manifesto />
-          <Inspector />
-        </div>
-
-        <ProvenancePanel />
-
-        <SiteFooter />
-      </div>
+      </ControlPlaneProvider>
     </VeritasProvider>
   );
 }

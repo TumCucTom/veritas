@@ -60,7 +60,7 @@
 
 > "The measured result. Federated detection **0.955** against siloed **0.637** — that gap is everything. **£295,800 of fraud prevented. 1,160 fewer victims. Hours to detect instead of days.** And zero customer records ever left an institution.
 >
-> This is a real `flock-sdk` model. It's UK-controlled, privacy-preserving, poisoning-resistant, and every contribution is provenance-anchored. Nothing leaves the silo — the data stays sovereign, only the intelligence is shared. In production it runs on FLock's FL Alliance.
+> This is a real `flock-sdk` model. It's UK-controlled, privacy-preserving, poisoning-resistant, and every contribution is provenance-anchored. Nothing leaves the silo — the data stays sovereign, only the intelligence is shared. In production the federation runs on **FLock's FL Alliance, with provenance anchored on-chain** — and for the most conservative banks, the same FLock-orchestrated federation deploys in a permissioned, crypto-free mode so compliance is never the blocker.
 >
 > Veritas: one bank detects, every bank is immunised. Thank you."
 
@@ -88,3 +88,21 @@
 1. **Privacy** — only gradients move, clipped + Gaussian-noised (differential privacy); the badge reads `customerRecordsTransmitted: 0`.
 2. **Speed** — federated propagation immunises the whole network in hours; siloed takes days.
 3. **Trust** — Multi-Krum rejects the poisoned member; the provenance trail records every contributor.
+
+---
+
+## After the demo — the adoption + FLock questions (Q&A prep)
+
+*Not part of the 3-min script. Use these if judges probe on "how do banks actually adopt this?" and "how much is this really FLock?" Full detail in [`specs/2026-06-20-veritas-production-architecture.md`](./superpowers/specs/2026-06-20-veritas-production-architecture.md).*
+
+**"How much engineering does a bank have to do?"**
+> "Near zero on the backend. The node ships as a sealed cloud-marketplace appliance that runs in the bank's *own* tenancy, in a confidential-computing enclave — they deploy it, grant one read-only role, approve one outbound rule. Our team authors the data mapping inside their environment; they review, they don't write it. The only first-party code a bank ever ships is an optional drop-in mobile SDK — the same pattern they already use for fraud/analytics vendors. Onboarding is configuration and approvals, not a build."
+
+**"Where does the customer data go?"**
+> "Three tiers, and data never leaves any of them. On the *device*, an SDK detects the victim being socially engineered — that data stays on the phone. In the *bank*, the node detects the mule side — that stays in their enclave. Only model deltas — clipped and noised — ever cross a boundary, and the TEE attestation cryptographically *proves* the running image can't do anything else. It's 'verify us,' not 'trust us.'"
+
+**"How much of this is actually FLock?"** *(the one to nail)*
+> "The federation is FLock-orchestrated and Veritas is a genuine `flock-sdk` model — train, evaluate, aggregate. Production runs on FLock's FL Alliance with provenance anchored **on-chain**: that's the decentralised, sovereign default. For the most conservative regulated banks we offer the *same* FLock-orchestrated federation in a permissioned, crypto-free mode — no wallet, no token — with a signed transparency log and an optional on-chain anchor. So crypto-free is an *extra adoption path on top of* FLock's decentralisation, never a replacement. And the confidential-computing layer is defence-in-depth that complements FLock — hardware attestation *and* federated decentralisation."
+
+**"Why challengers first?"**
+> "App-first challengers control one mobile app and ship weekly, so the SDK and a cloud-native enclave are trivial for them. We land them, prove the cross-bank lift, then the network effect — every new member improves every member's model — pulls in the incumbents, who can consume Veritas as a single risk signal inside the fraud platform they already run."

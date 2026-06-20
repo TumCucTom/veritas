@@ -2,35 +2,48 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useEvents } from "../lib/useEvents";
+import { useControlPlane } from "../lib/controlPlaneStore";
+import { controlPlane } from "../lib/controlplane";
+import type { TransparencyRoot } from "../lib/controlplane-types";
 import type { Provenance, VeritasEvent } from "../lib/types";
 
+/**
+ * Provenance ledger — the model bill-of-materials.
+ *
+ * Primary source is the control plane (GET /v1/tenants/{tid}/provenance). If
+ * the control plane is offline we fall back to the node's /provenance so the
+ * single-node demo keeps working. The "verify" affordance resolves the signed
+ * Merkle root (GET /v1/transparency/root) — tamper-evidence, on demand.
+ */
 export default function ProvenancePanel() {
-  const [records, setRecords] = useState<Provenance[]>([]);
+  const cp = useControlPlane();
+  const [nodeRecords, setNodeRecords] = useState<Provenance[]>([]);
 
-  const load = useCallback(async (): Promise<void> => {
+  // Node fallback — only consulted when the control plane has nothing.
+  const loadNode = useCallback(async (): Promise<void> => {
     try {
       const next = await api.provenance();
-      setRecords(Array.isArray(next) ? next : []);
+      setNodeRecords(Array.isArray(next) ? next : []);
     } catch {
-      // Provenance endpoint unreachable — keep the last known ledger.
+      // Node provenance unreachable — keep the last known ledger.
     }
   }, []);
 
-  // Initial fetch, then re-pull the ledger whenever a round closes so the
-  // bill-of-materials stays in lockstep with the global model on screen.
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadNode();
+  }, [loadNode]);
 
   const onEvent = useCallback(
     (e: VeritasEvent): void => {
-      if (e.type === "round_complete") void load();
+      if (e.type === "round_complete") void loadNode();
     },
-    [load],
+    [loadNode],
   );
   useEvents(onEvent);
 
-  const rows = records ?? [];
+  const rows: Provenance[] = cp.provenance.length > 0 ? cp.provenance : nodeRecords;
+  const source: "control-plane" | "node" =
+    cp.provenance.length > 0 ? "control-plane" : "node";
 
   return (
     <section
@@ -48,24 +61,14 @@ export default function ProvenancePanel() {
             Provenance ledger
           </h2>
         </div>
-        <span
-          className="hidden shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] sm:inline-flex"
-          style={{ background: "var(--bg-surface-2)", color: "var(--text-muted)" }}
-        >
-          <span
-            aria-hidden
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ background: "var(--accent-gold)" }}
-          />
-          tamper-evident
-        </span>
+        <VerifyControl />
       </header>
 
       {rows.length === 0 ? (
-        <EmptyState />
+        <EmptyState offline={cp.status === "offline"} />
       ) : (
         <div className="flex flex-col gap-2.5">
-          <Legend />
+          <Legend source={source} />
           <ol className="flex flex-col gap-2">
             {rows.map((rec) => (
               <ProvenanceRow key={rec.round} record={rec} />
@@ -75,9 +78,75 @@ export default function ProvenancePanel() {
       )}
 
       <p className="mt-auto pt-5 text-[11px] leading-snug text-text-muted">
-        Production: each round anchored on FLock on-chain attestation.
+        Signed Merkle transparency log; production path anchored on FLock on-chain
+        attestation.
       </p>
     </section>
+  );
+}
+
+/**
+ * "Verify" — fetches the signed Merkle root and shows size + root hash, the
+ * tamper-evidence affordance. The signature presence is surfaced; we never
+ * claim verification we didn't do.
+ */
+function VerifyControl() {
+  const [root, setRoot] = useState<TransparencyRoot | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(false);
+
+  const verify = useCallback(async (): Promise<void> => {
+    setBusy(true);
+    setErr(false);
+    try {
+      setRoot(await controlPlane.transparencyRoot());
+    } catch {
+      setErr(true);
+      setRoot(null);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  if (root) {
+    const shortRoot =
+      root.rootHash.length > 18
+        ? `${root.rootHash.slice(0, 10)}…${root.rootHash.slice(-6)}`
+        : root.rootHash;
+    return (
+      <div
+        className="shrink-0 rounded-[10px] border px-2.5 py-1.5 text-right"
+        style={{ borderColor: "rgba(52,211,153,0.35)", background: "rgba(52,211,153,0.06)" }}
+        title={`signed root ${root.rootHash}`}
+      >
+        <p className="eyebrow flex items-center justify-end gap-1.5" style={{ color: "var(--fed)" }}>
+          <span aria-hidden>✓</span> root verified
+        </p>
+        <p className="tabular mt-1 text-[11px] text-text-secondary">
+          size {root.size} · <span className="font-mono">{shortRoot}</span>
+        </p>
+        <p className="mt-0.5 text-[10px] text-text-muted">
+          {root.signaturePem ? "Ed25519 signed" : "unsigned"}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={verify}
+      disabled={busy}
+      className="shrink-0 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors disabled:opacity-60"
+      style={{
+        background: "var(--bg-surface-2)",
+        borderColor: err ? "var(--silo)" : "var(--border-default)",
+        color: err ? "var(--silo)" : "var(--text-muted)",
+      }}
+    >
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-gold)" }} />
+      {busy ? "verifying…" : err ? "plane offline · retry" : "verify · tamper-evident"}
+    </button>
   );
 }
 
@@ -143,36 +212,33 @@ function BankTag({ id, variant }: { id: string; variant: "kept" | "rejected" }) 
   );
 }
 
-function Legend() {
+function Legend({ source }: { source: "control-plane" | "node" }) {
   return (
     <div className="flex items-center gap-4 text-[11px] text-text-muted">
       <span className="flex items-center gap-1.5">
-        <span
-          aria-hidden
-          className="h-2 w-2 rounded-[3px]"
-          style={{ background: "var(--bg-surface-2)" }}
-        />
+        <span aria-hidden className="h-2 w-2 rounded-[3px]" style={{ background: "var(--bg-surface-2)" }} />
         contributed
       </span>
       <span className="flex items-center gap-1.5">
-        <span
-          aria-hidden
-          className="h-2 w-2 rounded-[3px]"
-          style={{ background: "rgba(240,74,82,0.5)" }}
-        />
+        <span aria-hidden className="h-2 w-2 rounded-[3px]" style={{ background: "rgba(240,74,82,0.5)" }} />
         rejected
+      </span>
+      <span className="ml-auto text-[10px] uppercase tracking-[0.12em]">
+        {source === "control-plane" ? "control plane" : "node"}
       </span>
     </div>
   );
 }
 
-function EmptyState() {
+function EmptyState({ offline }: { offline: boolean }) {
   return (
-    <p className="rounded-[14px] border border-dashed p-4 text-[13px] leading-relaxed text-text-muted"
+    <p
+      className="rounded-[14px] border border-dashed p-4 text-[13px] leading-relaxed text-text-muted"
       style={{ borderColor: "var(--border-default)" }}
     >
-      No rounds attested yet. Inject a campaign and advance a federated round to
-      begin recording the model bill-of-materials.
+      {offline
+        ? "Control plane offline — no attested rounds available. The ledger will populate once the federation control plane is reachable."
+        : "No rounds attested yet. Advance a federated round to begin recording the model bill-of-materials."}
     </p>
   );
 }

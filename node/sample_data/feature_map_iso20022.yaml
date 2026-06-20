@@ -1,0 +1,19 @@
+# Veritas declarative feature map — ISO 20022 pacs.008 (payment XML).
+#
+# The bank already emits ISO 20022 rail traffic; Veritas taps the existing feed.
+# Features use namespace-agnostic dotted element paths resolved per CdtTrfTxInf
+# block. Payment messages carry no fraud label, so SE supplies a constant
+# `label` for training (here: these are confirmed-mule examples).
+version: 1
+
+source:
+  kind: iso20022
+  path: pacs008_sample.xml            # relative to this file
+  label: 1                            # constant training label for parsed txns
+
+features:
+  # IntrBkSttlmAmt is the interbank settlement amount (the payment value).
+  amount:      { iso_path: "CdtTrfTxInf/IntrBkSttlmAmt", transform: zscore }
+  # InstdAmt = instructed amount; reused as a second balance-ish signal.
+  newOrig:     { iso_path: "CdtTrfTxInf/Amt/InstdAmt",   transform: zscore }
+  campaignSig: { default: 1.5 }       # these samples are the campaign typology

@@ -1,0 +1,25 @@
+# Veritas declarative feature map — CSV (warehouse stand-in).
+#
+# Authored by Veritas Solutions Engineering, approved by the bank. NO BANK CODE.
+# Maps the bank's columns -> the model's FEATURE_DIM feature contract. The
+# connector runtime resolves each feature in the canonical column order
+# (amount, oldOrig, newOrig, oldDest, newDest, accountAge, velocity, fanout,
+#  isTransfer, campaignSig); undeclared features default to 0.
+version: 1
+
+source:
+  kind: csv                         # 'csv' (warehouse) | 'iso20022' (payment XML)
+  path: transactions.csv            # relative to this file
+  label_column: is_fraud            # 0/1 ground-truth column for training
+
+features:
+  amount:      { from: amount }
+  oldOrig:     { from: old_balance_orig }
+  newOrig:     { from: new_balance_orig }
+  oldDest:     { from: old_balance_dest }
+  newDest:     { from: new_balance_dest }
+  accountAge:  { from: account_age_days }
+  velocity:    { from: velocity_1h }
+  fanout:      { from: fanout_24h }
+  isTransfer:  { from: is_transfer,        transform: bool }
+  campaignSig: { from: campaign_signature, default: 0.0 }
