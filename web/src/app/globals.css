@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+/*
+  Veritas — dark-luxury editorial trust/finance direction.
+  Deep slate-navy canvas, warm ivory text, gold/amber trust accent,
+  semantic green (federated wins) vs red (at-risk) for the race.
+*/
+:root {
+  --bg-deep: #0a0e16;
+  --bg-base: #0d1320;
+  --bg-surface: #131b2c;
+  --bg-surface-2: #182238;
+  --border-default: #233148;
+  --border-strong: #324363;
+
+  --text-primary: #f2efe6;
+  --text-secondary: #aeb6c6;
+  --text-muted: #6f7a90;
+
+  --accent-gold: #d6a85b;
+  --accent-gold-soft: #f0d49a;
+
+  --fed: #34d399;
+  --fed-deep: #0d6e4f;
+  --fed-glow: rgba(52, 211, 153, 0.28);
+  --silo: #f04a52;
+  --silo-deep: #7a1d22;
+  --silo-glow: rgba(240, 74, 82, 0.26);
+  --neutral-dot: #2a3346;
+
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SF Mono", monospace;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-panel: 0 24px 60px -28px rgba(0, 0, 0, 0.85);
+  --shadow-raise: 0 8px 28px -14px rgba(0, 0, 0, 0.7);
+}
+
+@theme inline {
+  --color-bg-deep: var(--bg-deep);
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-surface-2: var(--bg-surface-2);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-accent-gold: var(--accent-gold);
+  --color-fed: var(--fed);
+  --color-silo: var(--silo);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  letter-spacing: -0.011em;
+  /* Editorial atmosphere: a low gold vignette + faint grain via radial layers. */
+  background-image:
+    radial-gradient(120% 90% at 8% -10%, rgba(214, 168, 91, 0.07), transparent 45%),
+    radial-gradient(90% 80% at 100% 0%, rgba(52, 211, 153, 0.05), transparent 50%),
+    radial-gradient(100% 80% at 50% 120%, rgba(240, 74, 82, 0.045), transparent 55%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: var(--accent-gold);
+  color: var(--bg-deep);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Eyebrow label — used across panels for editorial rhythm. */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hairline {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--border-strong) 18%,
+    var(--border-strong) 82%,
+    transparent
+  );
+  height: 1px;
+}
+
+@keyframes veritas-flash {
+  0% {
+    box-shadow: 0 0 0 0 var(--silo-glow);
+    border-color: var(--silo);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(240, 74, 82, 0);
+    border-color: var(--border-default);
+  }
+}
+.attack-flash {
+  animation: veritas-flash 1.2s var(--ease-out-expo);
+}
+
+@keyframes veritas-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: veritas-rise 0.7s var(--ease-out-expo) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attack-flash,
+  .rise {
+    animation: none;
+  }
+}
