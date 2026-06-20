@@ -1,0 +1,18 @@
+***definitions***
+
+- :App: is a TypeScript package that exposes Veritas API types, runtime validation helpers, fixtures, and a small HTTP client.
+- :PackageEntrypoint: is the public TypeScript entry point of :App:.
+
+***implementation reqs***
+
+- :Implementation: should be in TypeScript and should run on Node.js 20 or later.
+- :Implementation: should avoid browser-only APIs so it can be used by the Next.js console, the edge SDK, and integration tests.
+- :Implementation: should export all public types and helpers from :PackageEntrypoint:.
+- :Implementation: should not perform network calls during module import.
+- :Implementation: should keep runtime validation dependency-free unless a dependency is explicitly generated into package.json.
+
+***test reqs***
+
+- :UnitTests: should be written in TypeScript and should be runnable with either "npm test" or "npx vitest run".
+- :ConformanceTests: should be written in TypeScript and should exercise observable API behavior using fixtures, not live services.
+- :ConformanceTests: must not require customer data, live bank data, or a running Veritas deployment.

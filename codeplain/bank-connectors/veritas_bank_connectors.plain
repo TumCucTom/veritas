@@ -1,0 +1,74 @@
+---
+description: 'Veritas Tier 1 bank connector regeneration specs for submission'
+import:
+  - veritas-python-package-template
+---
+
+***definitions***
+
+- :ConnectorContract: is the Veritas Tier 1 connector behavior described by [node/node/connectors/runtime.py](../../node/node/connectors/runtime.py), [node/node/connectors/feature_map.py](../../node/node/connectors/feature_map.py), and [node/sample_data/feature_map_iso20022.yaml](../../node/sample_data/feature_map_iso20022.yaml).
+- :FeatureMap: is the declarative mapping from bank-native fields to model feature names.
+- :ConnectorRuntime: is the loader that reads :FeatureMap: and produces model-ready feature rows.
+- :CsvConnector: is the connector for static warehouse exports and local demos.
+- :Iso20022Connector: is the connector for pacs.008 and pain.001 style payment messages.
+- :WarehouseConnector: is the connector interface for production warehouses such as Snowflake, BigQuery, Databricks, Postgres, or Kafka.
+- :FeatureRow: is one model-ready row containing numeric fraud features and connector metadata.
+- :ConnectorFixtures: are synthetic CSV, YAML, and XML files used by :UnitTests: and :ConformanceTests:.
+
+***implementation reqs***
+
+- :PackageEntrypoint: should be called `veritas_connectors/__init__.py`.
+- :Implementation: should include `veritas_connectors/feature_map.py`, `veritas_connectors/runtime.py`, `veritas_connectors/csv_connector.py`, `veritas_connectors/iso20022_connector.py`, and `veritas_connectors/warehouse.py`.
+- :FeatureMap: should support direct field paths, derived window features, literal values, and default values for missing optional fields.
+- :ConnectorRuntime: should expose a `load_rows(source, feature_map)` function that returns a list of :FeatureRow: dictionaries.
+- :WarehouseConnector: should define interfaces and local test doubles only; generated code must not include real bank credentials or cloud account identifiers.
+- :Implementation: should include fixture data that is obviously synthetic and should not resemble real customer records.
+
+***test reqs***
+
+- :UnitTests: should cover feature-map loading, CSV row mapping, ISO 20022 XML extraction, default handling, and warehouse interface behavior.
+- :ConformanceTests: should prove that generated :FeatureRow: output contains the numeric fields expected by the current Veritas model.
+- :ConformanceTests: should verify that no raw customer record is written outside the generated fixture directory.
+- :ConformanceTests: for each functional requirement should only cover that requirement's connector surface; ISO 20022 behavior belongs to the :Iso20022Connector: functional requirement, not the :FeatureMap: functional requirement.
+
+***functional specs***
+
+- Generate :FeatureMap: loading and validation.
+
+  ***acceptance tests***
+
+  - A valid YAML feature map with `amount`, `account_age`, `velocity_1h`, `fanout`, and `is_new_payee` should load without errors.
+  - A feature map missing `amount` should fail validation with an error naming the missing feature.
+  - A feature map entry with a default value should apply the default when the source field is absent.
+
+- Generate :CsvConnector: for static warehouse-style exports.
+
+  ***acceptance tests***
+
+  - Given a synthetic CSV row and a matching :FeatureMap:, :CsvConnector: should produce a :FeatureRow: containing only model features and connector metadata.
+  - :CsvConnector: should coerce numeric feature values to floats or integers before returning them.
+  - :CsvConnector: should not copy full raw source rows into the returned :FeatureRow:.
+
+- Generate :Iso20022Connector: for payment-message ingestion.
+
+  ***acceptance tests***
+
+  - Given the synthetic [pacs.008 sample](../../node/sample_data/pacs008_sample.xml), :Iso20022Connector: should extract settlement amount and debtor or creditor identifiers required by :FeatureMap:.
+  - :Iso20022Connector: should return a clear validation error when required XML paths are absent.
+  - :Iso20022Connector: should accept XML namespaces without requiring the namespace prefix to match the fixture exactly.
+
+- Generate :WarehouseConnector: interfaces and offline test doubles.
+
+  ***acceptance tests***
+
+  - :WarehouseConnector: should define a common `iter_records()` contract for Snowflake, BigQuery, Databricks, Postgres, and Kafka adapters.
+  - Offline test doubles should be able to emit records without external credentials, sockets, or cloud SDKs.
+  - Generated adapters should read credentials from constructor arguments or environment variables and should never hard-code secrets.
+
+- Generate :ConnectorFixtures: and connector conformance tests.
+
+  ***acceptance tests***
+
+  - :ConnectorFixtures: should include at least one CSV fixture, one ISO 20022 XML fixture, and one YAML feature-map fixture.
+  - :ConformanceTests: should assert that `load_rows` returns model-ready rows for both CSV and ISO 20022 fixtures.
+  - :ConformanceTests: should include a privacy guard proving that returned rows do not contain raw account names, addresses, phone numbers, or full payment narratives.

@@ -1,0 +1,17 @@
+headless: true
+verbose: true
+
+build-folder: plain_modules
+conformance-tests-folder: conformance_tests
+
+copy-build: true
+build-dest: build
+copy-conformance-tests: true
+conformance-tests-dest: build_conformance_tests
+
+unittests-script: ./scripts/run_unittests_typescript.sh
+conformance-tests-script: ./scripts/run_conformance_tests_typescript.sh
+test-script-timeout: 180
+
+log-to-file: true
+log-file-name: codeplain-contract-clients.log

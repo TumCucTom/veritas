@@ -1,0 +1,8 @@
+**/plain_modules/
+**/conformance_tests/
+**/build/
+**/build_conformance_tests/
+**/dist/
+**/dist_conformance_tests/
+**/codeplain.log
+**/*.log

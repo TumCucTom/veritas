@@ -1,0 +1,74 @@
+---
+description: 'Veritas shared API contract clients for the submission build'
+import:
+  - veritas-typescript-package-template
+---
+
+***definitions***
+
+- :ContractSource: is the checked-in Veritas API contract described by [contract/openapi.md](../../contract/openapi.md), [contract/schema.py](../../contract/schema.py), and [contract/types.ts](../../contract/types.ts).
+- :StateSnapshot: is the `/state` response containing round status, bank summaries, counters, campaign state, attack state, provenance, and `customerRecordsTransmitted`.
+- :BankSummary: is a member bank summary containing id, name, customer count, federated and siloed detection rates, and poisoned status.
+- :RegimeCounters: are the federated and siloed business metrics for fraud prevented, time to detect, victims, and loss.
+- :ProvenanceEntry: is one model bill-of-materials record for a federated round.
+- :PredictRequest: is the transaction and optional text payload sent to `/predict`.
+- :PredictResponse: is the label, confidence, indicators, and optional explanation returned by `/predict`.
+- :VeritasClient: is the generated TypeScript client used by web, edge SDK demos, and integration tests.
+- :ContractFixtures: are deterministic JSON examples for every public contract type.
+
+***implementation reqs***
+
+- :PackageEntrypoint: should be called `src/index.ts`.
+- :Implementation: should include `src/types.ts` for exported TypeScript interfaces, `src/validators.ts` for runtime validation, `src/client.ts` for :VeritasClient:, and `src/fixtures.ts` for :ContractFixtures:.
+- :VeritasClient: should accept a `baseUrl`, optional `fetch` implementation, and optional headers at construction time.
+- :VeritasClient: should expose `getState`, `getBanks`, `getProvenance`, `predict`, `injectCampaign`, `injectAttack`, `stepRound`, and `resetSimulation` methods.
+- :Implementation: should treat `customerRecordsTransmitted` as the literal number `0` wherever it appears in public types or fixtures.
+- :Implementation: should preserve backward compatibility with the hackathon contract while allowing additional optional production fields.
+
+***test reqs***
+
+- :UnitTests: should cover successful validation, validation failure messages, request body construction, and response parsing.
+- :UnitTests: should use fake `fetch` functions and should not contact `localhost` or the internet.
+- :ConformanceTests: should load :ContractFixtures: and verify that each fixture validates against its corresponding exported runtime validator.
+
+***functional specs***
+
+- Generate the shared TypeScript interfaces from :ContractSource:.
+
+  ***acceptance tests***
+
+  - :PackageEntrypoint: should export `StateSnapshot`, `BankSummary`, `RegimeCounters`, `ProvenanceEntry`, `PredictRequest`, and `PredictResponse`.
+  - `StateSnapshot.customerRecordsTransmitted` should be typed so only `0` is accepted by TypeScript.
+  - `PredictResponse.confidence` should be represented as a number between `0` and `1` in docs and fixtures.
+
+- Generate runtime validators for every public contract type.
+
+  ***acceptance tests***
+
+  - A valid :StateSnapshot: fixture should return a success result from `validateStateSnapshot`.
+  - A state fixture with `customerRecordsTransmitted` set to `1` should return a validation failure explaining that the only valid value is `0`.
+  - A :PredictResponse: fixture missing `label` should return a validation failure that names the missing field.
+
+- Generate :VeritasClient: with typed methods for all v1 REST endpoints.
+
+  ***acceptance tests***
+
+  - Calling `getState()` should issue a GET request to `/state` and return a validated :StateSnapshot:.
+  - Calling `predict(request)` should issue a POST request to `/predict` with a JSON body matching :PredictRequest: and return a validated :PredictResponse:.
+  - Calling `injectAttack("bank0")` should issue a POST request to `/attack/inject` with `{ "memberId": "bank0" }`.
+
+- Generate deterministic :ContractFixtures: for the demo and conformance tests.
+
+  ***acceptance tests***
+
+  - :ContractFixtures: should include a state snapshot with an active campaign, at least four banks, and `customerRecordsTransmitted` equal to `0`.
+  - :ContractFixtures: should include a provenance entry with contributors and a rejected poisoned member.
+  - :ContractFixtures: should include both a fraud and a non-fraud prediction response.
+
+- Generate integration notes that explain where reviewed output should be copied in Veritas.
+
+  ***acceptance tests***
+
+  - The generated README should say that reviewed TypeScript types belong in `contract/types.ts` and client helpers belong under `web/src/lib/` or `edge-sdk/src/`.
+  - The generated README should warn that Codeplain output must not replace privacy, cryptography, aggregation, or model primitives.
+  - The generated README should include the exact command `python3 -m unittest tests.test_codeplain_submission` as a source-artifact guard.

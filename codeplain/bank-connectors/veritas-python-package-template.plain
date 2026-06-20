@@ -1,0 +1,18 @@
+***definitions***
+
+- :App: is a Python package that exposes Veritas connector adapters and conformance fixtures.
+- :PackageEntrypoint: is the public Python module entry point of :App:.
+
+***implementation reqs***
+
+- :Implementation: should be in Python 3.13 or later.
+- :Implementation: should use type annotations throughout.
+- :Implementation: should use only the Python standard library unless package metadata explicitly declares an extra dependency.
+- :Implementation: should not open network connections during import or unit tests.
+- :Implementation: should keep customer records local and should never write raw customer rows outside the generated test fixture directory.
+
+***test reqs***
+
+- :UnitTests: should be implemented with Python's unittest framework and runnable with "python -m unittest discover".
+- :ConformanceTests: should be implemented with Python's unittest framework and runnable with "python -m unittest discover".
+- :ConformanceTests: must use synthetic fixtures only and must not require live bank credentials, external databases, or internet access.
