@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { VeritasProvider } from "../lib/store";
 import { ControlPlaneProvider } from "../lib/controlPlaneStore";
 import Controls from "../components/Controls";
@@ -102,7 +103,15 @@ function SiteHeader() {
             </p>
           </div>
         </div>
-        <PrivacyBadge />
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Link
+            href="/sales-simulator"
+            className="rounded-full border border-border-strong bg-bg-surface/60 px-3.5 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary transition-colors hover:border-accent-gold/60 hover:text-accent-gold"
+          >
+            Sales simulator
+          </Link>
+          <PrivacyBadge />
+        </div>
       </div>
       <div className="hairline" />
     </header>
