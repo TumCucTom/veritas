@@ -11,6 +11,7 @@ interface PredictResult {
 interface ExplainResult {
   explanation: string;
   source?: string;
+  groundedIn?: string;
 }
 
 const SAMPLE_TXN = { accountAgeDays: 2, fanout: 9, velocity: 1, campaignSignature: 1 };
@@ -25,18 +26,26 @@ export default function Inspector() {
     setLoading(true);
     setError(null);
     setExplain(null);
+    let scored: PredictResult | null = null;
     try {
-      const p = (await api.predict({ campaignSignature: 1 })) as PredictResult;
-      setPredict(p);
+      scored = (await api.predict({ campaignSignature: 1 })) as PredictResult;
+      setPredict(scored);
     } catch {
       setPredict(null);
       setError("Scoring service unreachable — start the API to inspect a live account.");
     }
     try {
+      // Ground the LLM summary in the real model output: pass the model's
+      // label / confidence / indicators so the summary can only restate them.
       const res = await fetch("/api/explain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transaction: SAMPLE_TXN }),
+        body: JSON.stringify({
+          transaction: SAMPLE_TXN,
+          label: scored?.label,
+          confidence: scored?.confidence,
+          indicators: scored?.indicators,
+        }),
       });
       const data = (await res.json()) as ExplainResult;
       setExplain(data);
@@ -81,30 +90,43 @@ export default function Inspector() {
 
       {predict && (
         <div className="mt-5 space-y-4">
-          <div className="flex items-center gap-3">
+          {/* PRIMARY signal — the real model's /predict output. */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span
+                className="rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                style={{
+                  background: isFraud ? "rgba(240,74,82,0.14)" : "rgba(52,211,153,0.14)",
+                  color: isFraud ? "var(--silo)" : "var(--fed)",
+                }}
+              >
+                {predict.label}
+              </span>
+              <span className="tabular text-[13px] text-text-secondary">
+                {Math.round((predict.confidence ?? 0) * 100)}% confidence
+              </span>
+            </div>
             <span
-              className="rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]"
-              style={{
-                background: isFraud ? "rgba(240,74,82,0.14)" : "rgba(52,211,153,0.14)",
-                color: isFraud ? "var(--silo)" : "var(--fed)",
-              }}
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]"
+              style={{ background: "var(--bg-surface-2)", color: "var(--fed)" }}
             >
-              {predict.label}
-            </span>
-            <span className="tabular text-[13px] text-text-secondary">
-              {Math.round((predict.confidence ?? 0) * 100)}% confidence
+              <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--fed)" }} />
+              model output
             </span>
           </div>
 
           {predict.indicators?.length > 0 && (
-            <ul className="space-y-1.5">
-              {predict.indicators.map((ind) => (
-                <li key={ind} className="flex items-start gap-2 text-[13px] text-text-secondary">
-                  <span aria-hidden className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-accent-gold" />
-                  {ind}
-                </li>
-              ))}
-            </ul>
+            <div>
+              <p className="eyebrow mb-1.5 text-text-muted">Indicators the model fired on</p>
+              <ul className="space-y-1.5">
+                {predict.indicators.map((ind) => (
+                  <li key={ind} className="flex items-start gap-2 text-[13px] text-text-secondary">
+                    <span aria-hidden className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-accent-gold" />
+                    {ind}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       )}
@@ -114,17 +136,30 @@ export default function Inspector() {
           className="mt-5 rounded-[14px] border-l-2 bg-bg-deep/60 p-4"
           style={{ borderColor: "var(--accent-gold)" }}
         >
-          <blockquote className="font-display text-[15px] leading-relaxed text-text-primary">
-            “{explain.explanation}”
-          </blockquote>
-          <figcaption className="eyebrow mt-3">
-            {explain.source === "minimax" ? "MiniMax-Text-01" : "Offline fallback"} · analyst rationale
+          <figcaption className="eyebrow mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-text-muted">
+            <span>Plain-English summary</span>
+            <span aria-hidden>·</span>
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em]"
+              style={{ background: "var(--bg-surface-2)", color: "var(--accent-gold)" }}
+            >
+              {explain.source === "minimax" ? "MiniMax-Text-01" : "offline fallback"}
+            </span>
           </figcaption>
+          <blockquote className="text-[13px] leading-relaxed text-text-secondary">
+            {explain.explanation}
+          </blockquote>
+          {explain.groundedIn && (
+            <p className="mt-2.5 text-[11px] leading-snug text-text-muted">
+              Grounded in: <span className="text-text-secondary">{explain.groundedIn}</span>
+            </p>
+          )}
         </figure>
       )}
 
       <p className="mt-auto pt-5 text-[11px] leading-snug text-text-muted">
-        The explanation is generated server-side. The MiniMax key never reaches the browser.
+        The label, confidence and indicators are the model&rsquo;s own output. The summary only restates
+        them in plain English — generated server-side, and the MiniMax key never reaches the browser.
       </p>
     </section>
   );
