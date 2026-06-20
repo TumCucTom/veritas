@@ -28,6 +28,9 @@ models/
 *.pt
 *.pkl
 
+# Test / tooling artifacts
+.playwright-mcp/
+
 # OS / editor
 .DS_Store
 *.log
