@@ -109,19 +109,23 @@ function pointLineDistance(
 function frontiers(input: ContagionInput): ContagionFrame["frontier"] {
   if (!input.campaignActive) return { fraudRadius: 0, protectionRadius: 0 };
 
-  const round = Math.max(0, input.round);
   const detection = clamp01(input.gnnRecall ?? input.detection);
-  const fraudBase = input.regime === "siloed" ? 0.18 : 0.12;
-  const fraudSpeed = input.regime === "siloed" ? 0.115 : 0.075;
-  const fraudResistance = input.regime === "federated" ? detection * 0.32 : detection * 0.1;
-  const fraudRadius = clamp01(fraudBase + round * fraudSpeed - fraudResistance);
+  // The campaign reaches full spread within the first several rounds, then
+  // holds — the LIVE round counter can be in the thousands, so cap progress
+  // instead of letting `round * speed` saturate every term (which collapsed
+  // both regimes to "fully protected" and made the panels identical).
+  const progress = clamp01(Math.max(0, input.round) / 6);
 
-  const protectionBase = input.regime === "federated" ? 0.12 : 0.04;
-  const protectionSpeed = input.regime === "federated" ? 0.14 : 0.04;
-  const protectionCap = input.regime === "federated" ? 1 : 0.58;
-  const protectionRadius = Math.min(
-    protectionCap,
-    clamp01((protectionBase + round * protectionSpeed) * (0.35 + detection * 0.9)),
+  // fraudRadius ≈ the share of customers this regime FAILS to protect (what it
+  // misses). Siloed detection is low, so it leaves a large red contagion;
+  // federation catches far more and contains it to a small pocket.
+  const missRate = 1 - detection;
+  const fraudRadius = clamp01(missRate * progress * (input.regime === "siloed" ? 1.18 : 0.7));
+
+  // protectionRadius ≈ the share actively protected (what it catches). Higher
+  // for federation.
+  const protectionRadius = clamp01(
+    detection * progress * (input.regime === "federated" ? 1.0 : 0.82),
   );
 
   return { fraudRadius, protectionRadius };
@@ -142,28 +146,35 @@ function pointForIndex(index: number, input: ContagionInput): ContagionPoint {
 
   const { fraudRadius, protectionRadius } = frontiers(input);
   const sourceDistance = Math.min(distance(x, y, 0.14, 0.2), distance(x, y, 0.83, 0.78));
-  const communityDistance = distance(x, y, cx, cy);
   const corridorDistance = nearestCorridorDistance(x, y, bank);
-  const hubBoost = hub ? 0.2 : 0;
-  const spreadScore = clamp01(
-    sourceDistance * 0.92 + communityDistance * 1.15 + corridorDistance * 0.7 - hubBoost,
-  );
-  const protectionScore = clamp01(
-    distance(x, y, 0.5, 0.5) * 0.78 + communityDistance * 0.48 - (hub ? 0.06 : 0),
-  );
+  const hubBoost = hub ? 0.18 : 0;
 
-  const fraudNoise = seededUnit(index, 131) * 0.13;
-  const protectionNoise = seededUnit(index, 197) * 0.11;
-  const protectedByWave = input.campaignActive && protectionScore + protectionNoise < protectionRadius;
-  const exposedByWave = input.campaignActive && spreadScore + fraudNoise < fraudRadius;
+  // Fraud travels the mule corridors and radiates from the seeded sources, so a
+  // customer is more exposable the closer they sit to a corridor or a source.
+  // The FRACTION actually exposed is governed by fraudRadius (≈ what the regime
+  // misses), so siloed lights up a large red contagion and federation a small,
+  // contained pocket — driven by the real detection gap, not the round number.
+  const corridorProx = clamp01(1 - corridorDistance * 2.4);
+  const sourceProx = clamp01(1 - sourceDistance * 1.8);
+  const exposeProp = clamp01(
+    fraudRadius * (0.5 + corridorProx * 0.9 + sourceProx * 0.5 + hubBoost),
+  );
+  const uExpose = seededUnit(index, 131);
+  const uProtect = seededUnit(index, 197);
+  const exposed = input.campaignActive && uExpose < exposeProp;
+  const protectedByWave =
+    input.campaignActive && !exposed && uProtect < protectionRadius;
 
-  const state: ContagionState = protectedByWave ? "protected" : exposedByWave ? "exposed" : "neutral";
-  const intensity =
-    state === "protected"
-      ? clamp01(1 - protectionScore + protectionRadius * 0.4)
-      : state === "exposed"
-        ? clamp01(1 - spreadScore + fraudRadius * 0.35)
-        : 0.35 + seededUnit(index, 233) * 0.3;
+  const state: ContagionState = exposed
+    ? "exposed"
+    : protectedByWave
+      ? "protected"
+      : "neutral";
+  const intensity = exposed
+    ? clamp01(0.55 + corridorProx * 0.4)
+    : protectedByWave
+      ? clamp01(0.5 + uProtect * 0.4)
+      : 0.32 + seededUnit(index, 233) * 0.28;
 
   return { x, y, bank, state, intensity, hub };
 }

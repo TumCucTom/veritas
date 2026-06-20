@@ -179,8 +179,8 @@ function ContagionPanel({
       <ContagionCanvas frame={frame} regime={regime} round={round} />
 
       <dl className="mt-3 grid grid-cols-3 gap-3">
-        <SmallStat label="visual exposure" value={frame.totals.exposed} tone="silo" />
-        <SmallStat label="visual containment" value={frame.totals.protected} tone="fed" />
+        <SmallStat label="customers exposed" value={frame.totals.exposed} tone="silo" />
+        <SmallStat label="customers protected" value={frame.totals.protected} tone="fed" />
         <SmallStat label="mule corridors" value={frame.totals.crossBankLinks} tone="gold" />
       </dl>
     </article>
