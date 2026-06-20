@@ -80,6 +80,10 @@ def _xy_list(xy: np.ndarray, nd=4):
     return [[_r(a, nd), _r(b, nd)] for a, b in np.asarray(xy)]
 
 
+def _xyz_list(xyz: np.ndarray, nd=4):
+    return [[_r(a, nd), _r(b, nd), _r(c, nd)] for a, b, c in np.asarray(xyz)]
+
+
 def _mean_intra_inter(emb2d: np.ndarray, labels: np.ndarray):
     """Mean intra-class vs inter-class centroid distance (cluster separation)."""
     labels = np.asarray(labels)
@@ -166,7 +170,7 @@ def gen_umap():
         )
     silo_acts = _representation(silo_w, X_cat, X_dense, cardinalities)
 
-    # ---- Project to 2D --------------------------------------------------
+    # ---- Project to 3D --------------------------------------------------
     # Fit the reducer ONCE on the final federated round; transform every frame
     # with the same fitted reducer so coordinates are comparable across frames.
     final_round = max(checkpoints)
@@ -174,7 +178,7 @@ def gen_umap():
     try:
         import umap
         reducer = umap.UMAP(
-            n_components=2, n_neighbors=20, min_dist=0.3,
+            n_components=3, n_neighbors=20, min_dist=0.3,
             random_state=SEED, metric="euclidean",
         )
         reducer.fit(fed_acts[final_round])
@@ -183,32 +187,33 @@ def gen_umap():
         print(f"[umap] falling back to PCA ({exc})")
         from sklearn.decomposition import PCA
         method = "pca"
-        reducer = PCA(n_components=2, random_state=SEED)
+        reducer = PCA(n_components=3, random_state=SEED)
         reducer.fit(fed_acts[final_round])
         transform = reducer.transform
 
-    # Transform every frame with the SAME fitted reducer, then normalize all
-    # frames with a SHARED scale (computed from the final frame) so the
-    # animation does not jump in scale between rounds.
+    # Transform every frame with the SAME fitted reducer, then normalize ALL
+    # frames + the siloed-final together with ONE shared center + uniform scale
+    # so coordinates are comparable across frames and the animation does not
+    # jump in scale or position between rounds.
     raw_frames = {r: transform(fed_acts[r]) for r in checkpoints}
     raw_silo = transform(silo_acts)
 
-    final_xy = raw_frames[final_round]
-    center = final_xy.mean(axis=0)
-    scale = np.percentile(np.abs(final_xy - center), 99)
+    all_pts = np.vstack([raw_frames[r] for r in checkpoints] + [raw_silo])
+    center = all_pts.mean(axis=0)
+    scale = np.percentile(np.abs(all_pts - center), 99)
     if scale <= 0:
         scale = 1.0
 
-    def shared_norm(xy):
-        return np.clip((np.asarray(xy) - center) / scale, -1.0, 1.0)
+    def shared_norm(xyz):
+        return np.clip((np.asarray(xyz) - center) / scale, -1.0, 1.0)
 
     frames = []
     for r in checkpoints:
-        frames.append({"round": int(r), "fed": _xy_list(shared_norm(raw_frames[r]))})
-    siloed_final = _xy_list(shared_norm(raw_silo))
+        frames.append({"round": int(r), "fed": _xyz_list(shared_norm(raw_frames[r]))})
+    siloed_final = _xyz_list(shared_norm(raw_silo))
 
     # ---- separation sanity metric on the final federated frame ----------
-    final_norm = shared_norm(final_xy)
+    final_norm = shared_norm(raw_frames[final_round])
     inter, intra = _mean_intra_inter(final_norm, y)
     sep_ratio = inter / max(intra, 1e-9)
     try:
@@ -220,6 +225,12 @@ def gen_umap():
     silo_inter, silo_intra = _mean_intra_inter(shared_norm(raw_silo), y)
     silo_ratio = silo_inter / max(silo_intra, 1e-9)
 
+    # per-round separation (should climb across rounds; fraud separates by final)
+    per_round = []
+    for r in checkpoints:
+        ri, ra = _mean_intra_inter(shared_norm(raw_frames[r]), y)
+        per_round.append((int(r), ri / max(ra, 1e-9)))
+
     out = {
         "n": int(n),
         "labels": [int(v) for v in y],
@@ -227,9 +238,10 @@ def gen_umap():
         "siloedFinal": siloed_final,
         "meta": {
             "method": method,
+            "dims": 3,
             "note": ("federated embedding model: penultimate ReLU activations "
-                     "+ decision logit, UMAP-projected; fraud separates from "
-                     "legit as federated rounds progress (federated beats "
+                     "+ decision logit, UMAP-projected to 3D; fraud separates "
+                     "from legit as federated rounds progress (federated beats "
                      "siloed via the shared cross-bank fraud corridor)"),
         },
     }
@@ -243,6 +255,7 @@ def gen_umap():
         "fed_sep_ratio": sep_ratio,
         "fed_silhouette": sil,
         "silo_sep_ratio": silo_ratio,
+        "per_round": per_round,
         "n_fraud": int(y.sum()),
     }
 
@@ -531,11 +544,13 @@ def _validate_umap(d):
     n = d["n"]
     assert len(d["labels"]) == n and all(v in (0, 1) for v in d["labels"])
     assert d["meta"]["method"] in ("umap", "pca", "tsne")
+    assert d["meta"]["dims"] == 3
     assert len(d["siloedFinal"]) == n
+    assert all(len(p) == 3 for p in d["siloedFinal"])
     for fr in d["frames"]:
         assert set(fr) == {"round", "fed"}
         assert len(fr["fed"]) == n
-        assert all(len(p) == 2 for p in fr["fed"])
+        assert all(len(p) == 3 for p in fr["fed"])
 
 
 def _validate_graph(d):
@@ -593,6 +608,8 @@ def main():
           f"fraud={s1['n_fraud']}")
     print(f"  FED separation inter/intra = {s1['fed_sep_ratio']:.3f}  "
           f"silhouette = {s1['fed_silhouette']:.3f}")
+    print("  per-round separation (should climb): " +
+          "  ".join(f"r{r}={v:.3f}" for r, v in s1['per_round']))
     print(f"  SILO separation inter/intra = {s1['silo_sep_ratio']:.3f}  "
           f"(federated should beat siloed)")
     print(f"graph.json       {kb(p2):7.1f} KB  {p2}")
