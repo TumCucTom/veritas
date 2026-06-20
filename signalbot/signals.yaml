@@ -134,12 +134,28 @@ queries:
   - "privacy preserving fraud detection"
   - "fraud data silo banks GDPR"
   - "collaborative fraud detection without sharing data"
+  # Broadened angles to raise recall across all sources.
+  - "consortium fraud model banks"
+  - "fraud intelligence sharing regulation"
+  - "transaction monitoring shared utility"
+  - "data clean room financial crime"
+  - "secure multiparty computation banking fraud"
+  - "scam payments cross institution"
+  - "Pay.UK PSR mandatory reimbursement fraud"
+  - "anti money laundering data sharing 314(b)"
+  - "fraud model without sharing customer data"
+  - "differential privacy financial transactions"
 
 # Per-source configuration. Disable a source by removing it or setting enabled:false.
 sources:
   reddit:
     enabled: true
-    subreddits: [fintech, AskBankers, fraud, GDPR, datascience, MachineLearning, ukpersonalfinance, BankingCareers]
+    # Needs Reddit OAuth app creds in env (REDDIT_CLIENT_ID/SECRET, optionally
+    # USERNAME/PASSWORD). Without them the source emits search links only —
+    # Reddit 403s unauthenticated API access. See sources/reddit.py.
+    subreddits: [fintech, AskBankers, fraud, GDPR, datascience, MachineLearning,
+                 ukpersonalfinance, BankingCareers, antifraud, Banking, CreditCards,
+                 algotrading, privacy, MLQuestions]
     limit_per_query: 25
 
   hackernews:
@@ -158,8 +174,9 @@ sources:
   jobs:
     enabled: true
     # Public ATS boards — no API key required.
-    greenhouse: [ravelin, featurespace, monzo, wise, gocardless]
-    lever: [feedzai, quantexa]
+    greenhouse: [ravelin, featurespace, monzo, wise, gocardless, starlingbank,
+                 revolut, checkout, sardine, unit21, hawkai, lunar, zopa]
+    lever: [feedzai, quantexa, fingerprintjs, sift, socure]
     # A posting counts only if it mentions one of these.
     keywords_any: [fraud, "financial crime", fincrime, mule, "money laundering", federated, aml]
 

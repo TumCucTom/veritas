@@ -44,6 +44,13 @@ class FakeHttp:
             raise RuntimeError(f"no route for {url}")
         return FakeResp(payload)
 
+    def post(self, url, **kwargs):
+        self.calls.append(url)
+        payload = self._match(url)
+        if payload is None:
+            raise RuntimeError(f"no route for {url}")
+        return FakeResp(payload)
+
 
 def _config_one_query():
     cfg = load_config()
@@ -51,11 +58,14 @@ def _config_one_query():
     return cfg
 
 
-def test_reddit_parses_children():
+def test_reddit_parses_children(monkeypatch):
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "id")
+    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret")
     cfg = _config_one_query()
     cfg.sources["reddit"] = {"enabled": True, "subreddits": [], "limit_per_query": 5}
     http = FakeHttp({
-        "search.json": {
+        "access_token": {"access_token": "tok"},
+        "oauth.reddit.com": {
             "data": {
                 "children": [
                     {"data": {

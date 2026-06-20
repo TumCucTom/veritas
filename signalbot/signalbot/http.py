@@ -67,6 +67,12 @@ class Http:
         resp.raise_for_status()
         return resp.json()
 
+    def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Single POST (used for OAuth token exchange) — throttled, no retry so
+        we never double-submit a credential grant."""
+        self._throttle()
+        return self._client.post(url, **kwargs)
+
     def close(self) -> None:
         self._client.close()
 
