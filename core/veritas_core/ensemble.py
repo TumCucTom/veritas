@@ -71,7 +71,8 @@ from . import mlp
 from . import sequence as gru
 from . import embeddings as emb
 from . import fedgbdt
-from .aggregation import fedavg, multi_krum
+from .aggregation import fedavg
+from . import robust
 
 
 # ===========================================================================
@@ -110,9 +111,18 @@ def split_view(view, meta_frac=0.4, seed=0):
     meta-learner trains on base predictions over ``meta_view`` (unseen rows).
     """
     n = len(view["y"])
+    if n <= 1:
+        # Anti-leakage guard: a clean disjoint base/meta split needs at least
+        # one row on EACH side. At n<=1 any split degenerates to full leakage
+        # (base and meta would share the only row, or one side is empty), so we
+        # refuse rather than silently train+evaluate on the same row.
+        raise ValueError(
+            f"split_view needs >=2 rows for a disjoint base/meta split, got n={n}")
     rng = np.random.default_rng(seed)
     perm = rng.permutation(n)
-    n_meta = max(1, int(round(n * meta_frac)))
+    # Keep at least one row on BOTH sides so neither bases nor the meta-learner
+    # train on an empty set and the split stays genuinely disjoint.
+    n_meta = min(n - 1, max(1, int(round(n * meta_frac))))
     meta_idx = np.sort(perm[:n_meta])
     base_idx = np.sort(perm[n_meta:])
     return _slice_view(view, base_idx), _slice_view(view, meta_idx)
@@ -158,19 +168,27 @@ class _NNAdapter:
         raise NotImplementedError
 
     # --- federation driver ----------------------------------------------
-    def _aggregate(self, updates):
+    def _aggregate(self, updates, num_examples=None):
         if self.robust and len(updates) >= 3:
-            m = max(1, len(updates) - self.n_byzantine)
-            agg, _ = multi_krum(updates, n_byzantine=self.n_byzantine, m=m)
+            # Krum SELECTS a Byzantine-free majority (delegates to the single
+            # canonical implementation in robust.py, which clamps negative
+            # squared distances) rather than averaging everyone after dropping
+            # one outlier.
+            agg, _, _ = robust.multi_krum_select(
+                updates, n_byzantine=self.n_byzantine,
+                m=max(1, len(updates) - self.n_byzantine))
             return agg
-        # weight by each bank's sample count
-        return fedavg(updates)
+        # FedAvg weighted by each bank's sample count (numExamples): banks with
+        # more local rows pull the global model proportionally harder, so an
+        # imbalanced federation is averaged fairly rather than one-vote-per-bank.
+        return fedavg(updates, weights=num_examples)
 
     def fed_train(self, views):
         w = self._init(views)
+        num_examples = [len(v["y"]) for v in views]
         for _ in range(self.rounds):
             updates = [self._train_local(w, v) for v in views]
-            w = self._aggregate(updates)
+            w = self._aggregate(updates, num_examples=num_examples)
         self.w = w
         return self
 
@@ -346,12 +364,14 @@ class StackedEnsemble:
             np.column_stack([b.predict(v) for b in self.bases]) for v in views
         ]
 
-    def _aggregate_meta(self, updates):
+    def _aggregate_meta(self, updates, num_examples=None):
         if self.robust and len(updates) >= 3:
-            m = max(1, len(updates) - self.n_byzantine)
-            agg, _ = multi_krum(updates, n_byzantine=self.n_byzantine, m=m)
+            agg, _, _ = robust.multi_krum_select(
+                updates, n_byzantine=self.n_byzantine,
+                m=max(1, len(updates) - self.n_byzantine))
             return agg
-        return fedavg(updates)
+        # sample-count (numExamples) weighted FedAvg over the meta rows.
+        return fedavg(updates, weights=num_examples)
 
     # --- training -------------------------------------------------------
     def fed_train(self, bank_views, meta_frac=0.4, seed=0):
@@ -377,13 +397,14 @@ class StackedEnsemble:
         # 4. federated logistic meta-learner over base-prob features (REUSE model.py)
         n_feat = len(self.bases)
         w = logistic.init_weights(n_feat)
+        meta_counts = [len(my) for my in meta_y]
         for _ in range(self.meta_rounds):
             updates = [
                 logistic.train_local(w, mx, my, epochs=self.meta_epochs,
                                      lr=self.meta_lr)
                 for mx, my in zip(meta_X, meta_y)
             ]
-            w = self._aggregate_meta(updates)
+            w = self._aggregate_meta(updates, num_examples=meta_counts)
         self.meta_w = w
         return self
 

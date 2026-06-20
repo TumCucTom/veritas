@@ -70,6 +70,7 @@ sub-model gets a faithful, comparably-scaled private update. See
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -78,6 +79,7 @@ from . import model as logistic
 from . import mlp
 from . import embeddings as emb
 from .data import FEATURE_DIM
+from .dp import add_noise, clip_update
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +333,75 @@ def clip_blocks(delta, max_norms):
         if nrm > budget and nrm > 0.0:
             out[a:b] = seg * (budget / nrm)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Canonical wire dimension + per-block DP budgets (node federation contract)
+# ---------------------------------------------------------------------------
+# Convenience alias of ``weight_dim()`` so the node and the dimension-agnostic
+# plane can derive the expected wire length without a magic number.
+LIVE_ENSEMBLE_DIM: int = weight_dim()
+
+# Per-block L2 clipping budgets for the packed delta. The blocks are
+# HETEROGENEOUS in scale/dimensionality (see module docstring): the MLP and
+# embedding blocks carry hundreds of params (large L2) while the logistic and
+# meta blocks carry ~11 and 4 (tiny L2). A single GLOBAL clip would be set by —
+# and crush — the big blocks, zeroing the small ones. These are the REAL
+# clipping radii; the noise scale below is calibrated to THEM so the implied
+# (eps, delta) matches what is actually enforced on the wire.
+BLOCK_BUDGETS: dict[str, float] = {
+    "logistic": 3.0,
+    "mlp": 6.0,
+    "embeddings": 8.0,
+    "meta": 3.0,
+}
+
+
+def block_slice(name: str) -> slice:
+    """``slice`` object for one named block of the packed vector."""
+    a, b = block_slices()[name]
+    return slice(a, b)
+
+
+def genesis_weights() -> np.ndarray:
+    """A zero live-ensemble vector of the canonical dimension.
+
+    Used as the federation starting point; the dimension-agnostic plane derives
+    the expected wire length from this genesis/global model (no magic number).
+    """
+    return np.zeros(LIVE_ENSEMBLE_DIM, dtype=np.float64)
+
+
+def noise_sensitivity(budgets: dict[str, float] | None = None) -> float:
+    """Total L2 clipping sensitivity of one per-block-clipped update.
+
+    Blocks are clipped INDEPENDENTLY, so the worst-case L2 of the whole
+    concatenated update is ``sqrt(sum(budget_b^2))``. The Gaussian mechanism's
+    per-coordinate std is ``sigma * sensitivity`` — calibrating to THIS (rather
+    than a stale single ``max_norm``) makes the implied privacy guarantee honest.
+    """
+    budgets = budgets or BLOCK_BUDGETS
+    return math.sqrt(sum(v * v for v in budgets.values()))
+
+
+def privatize(update, sigma, *, budgets: dict[str, float] | None = None,
+              rng: np.random.Generator | None = None):
+    """Per-block-clip ``update`` then add Gaussian noise of the right scale.
+
+    Clipping is per-block (``budgets``, via :func:`clip_blocks`). The noise
+    standard deviation is ``sigma * noise_sensitivity(budgets)`` so it is
+    calibrated to the ACTUAL total L2 sensitivity the clipping allows, not a
+    stale constant. ``rng`` follows SPEC-DP: the default is a CSPRNG-seeded
+    generator (via ``veritas_core.dp.add_noise``); pass an explicit seeded
+    generator only in tests.
+    """
+    budgets = budgets or BLOCK_BUDGETS
+    update = np.asarray(update, dtype=np.float64)
+    clipped = clip_blocks(update, budgets)
+    sensitivity = noise_sensitivity(budgets)
+    # add_noise uses sigma*max_norm as the per-coordinate std; pass the real
+    # total sensitivity as max_norm so the noise matches the enforced clipping.
+    return add_noise(clipped, sigma, sensitivity, rng)
 
 
 # ---------------------------------------------------------------------------

@@ -2,27 +2,18 @@ import numpy as np
 from .data import make_bank_data, inject_campaign, FEATURE_DIM
 from .model import init_weights, train_local, recall
 from .aggregation import fedavg
+from .robust import multi_krum_select
 from .dp import privatize
 from .attack import poisoned_update
 
 NAMES=["Barclays","NatWest","Lloyds","HSBC","Santander","Monzo","Starling","Nationwide"]
 CUST=[2_100_000,1_900_000,1_750_000,1_600_000,1_400_000,900_000,700_000,1_500_000]
 AVG_LOSS=255; AT_RISK=1500; THRESH=0.9; HOURS=1.0; MAX_NORM=2.0; SIGMA=0.05; EPOCHS=8
-# Federated recall the global model must regain before we surface the
-# "malicious member rejected" beat, proving the defence preserved the model.
-ATTACK_RECOVERED=0.75
-
-
-def _krum_scores(U, n_byzantine):
-    """Per-update Krum score: sum of squared dists to the k nearest peers.
-    A poisoned (sign-flipped, amplified) update sits far from the honest cloud
-    and therefore earns the largest score."""
-    n = len(U); k = max(1, n - n_byzantine - 2)
-    dist = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            d = float(np.sum((U[i] - U[j]) ** 2)); dist[i, j] = dist[j, i] = d
-    return np.array([np.sort(dist[i])[1:k + 1].sum() for i in range(n)])
+# Number of rounds the poison campaign keeps injecting. The attack does NOT
+# self-terminate before the defence acts: detection fires on the round the
+# robust aggregator actually rejects the poisoned contributor, not on a later
+# "recovery" round (see step()).
+POISON_ROUNDS=6
 
 
 class Engine:
@@ -39,6 +30,13 @@ class Engine:
         self.seen = [False] * n_banks
         self.cum = {"fed": 0.0, "silo": 0.0}
         self._rejected_ever = False; self._attack_announced = False
+        # True on the rounds we ACTUALLY injected poison into a contributor's
+        # update (drives the per-bank `poisoned` flag from real state, not a
+        # hardcoded round window).
+        self._poison_injected_this_round = False
+        # Regimes whose fraud has already propagated (for one-shot
+        # fraud_propagated events per regime).
+        self._propagated = set()
         # Model bill-of-materials: per-round provenance of which members were
         # FedAvg'd into the global model and which (poisoned) update was dropped.
         # In production each record would be anchored on FLock on-chain attestation.
@@ -61,17 +59,20 @@ class Engine:
 
     def _aggregate(self, ups):
         """Federated aggregation. With no attack: FedAvg over all honest updates
-        (keeps every campaign-learning signal). Under attack: use Krum scoring to
-        drop the single most-outlying update, then FedAvg the survivors so the
-        poison is filtered without discarding honest campaign knowledge.
+        (keeps every campaign-learning signal). Under attack: principled
+        Multi-Krum SELECTION (the single canonical implementation in
+        ``robust.multi_krum_select``, which clamps negative squared distances)
+        keeps the Byzantine-free majority and drops the outlier(s), so the poison
+        is filtered without a parallel hand-rolled Krum.
         Returns (aggregate, rejected_index_or_None)."""
-        U = np.stack(ups); rejected = None
         if self.use_krum and self.attack_bank is not None:
-            worst = int(np.argmax(_krum_scores(U, n_byzantine=1)))
-            keep = [i for i in range(self.n) if i != worst]
-            rejected = worst
-            return fedavg([U[i] for i in keep]), rejected
-        return fedavg(ups), rejected
+            agg, selected, _ = multi_krum_select(ups, n_byzantine=1)
+            rejected_set = sorted(set(range(self.n)) - set(selected))
+            # Surface the single dropped member for the demo's per-round BoM /
+            # attack_detected beat (Multi-Krum keeps n-1 here).
+            rejected = rejected_set[0] if rejected_set else None
+            return agg, rejected
+        return fedavg(ups), None
 
     def step(self):
         ev = []; self.round += 1
@@ -83,10 +84,20 @@ class Engine:
             if self.use_dp:
                 u = privatize(u, MAX_NORM, SIGMA, self.rng)
             ups.append(u)
-        if self.attack_bank is not None and self.round < 3:
+        # Inject poison for the whole campaign window (POISON_ROUNDS), so the
+        # defence — not the attack ending — is what restores health. The flag
+        # records whether we ACTUALLY poisoned this round (drives `poisoned`).
+        self._poison_injected_this_round = (
+            self.attack_bank is not None and self.round <= POISON_ROUNDS)
+        if self._poison_injected_this_round:
             ups[self.attack_bank] = poisoned_update(ups[self.attack_bank], 12.0)
         agg, rejected = self._aggregate(ups)
-        if self.attack_bank is not None and rejected == self.attack_bank:
+        # attack_detected reflects ACTUAL rejection: it fires the first round the
+        # robust aggregator drops the poisoned contributor while we are in fact
+        # injecting poison into it — decoupled from any recall "recovery".
+        rejected_attacker_now = (
+            self._poison_injected_this_round and rejected == self.attack_bank)
+        if rejected_attacker_now:
             self._rejected_ever = True
         self.global_w = self.global_w + agg
         for i in range(self.n):
@@ -105,14 +116,26 @@ class Engine:
             "rejected": [f"bank{i}" for i in dropped],
             "globalRecall": round(sum(fed) / self.n, 3),
         })
-        # Announce the rejected malicious member only once its updates have been
-        # filtered AND the global model has demonstrably recovered, so the demo's
-        # "attack rejected -> model still healthy" beat lands on a protected state.
-        if (self.attack_bank is not None and self._rejected_ever
-                and not self._attack_announced and max(fed) > ATTACK_RECOVERED):
+        # Announce the rejected malicious member the FIRST round the robust
+        # aggregator actually drops its poisoned update — detection of the
+        # attack, NOT a measure of post-attack health. (Recall recovery is shown
+        # separately via the per-bank detection numbers.)
+        if rejected_attacker_now and not self._attack_announced:
             self._attack_announced = True
             ev.append({"type": "attack_detected",
                        "data": {"bankId": f"bank{self.attack_bank}", "rejected": True}})
+        # Fraud propagation: once a campaign is active, fraud has SPREAD to every
+        # bank's customers (campaign frauds appear in every eval set). The
+        # siloed regime sees it bank-by-bank with no shared defence; the
+        # federated regime propagates the LEARNED signal so all banks are
+        # protected. Emit one fraud_propagated per regime when it first spreads.
+        if self.campaign:
+            for regime in ("siloed", "federated"):
+                if regime not in self._propagated:
+                    self._propagated.add(regime)
+                    ev.append({"type": "fraud_propagated",
+                               "data": {"bankId": f"bank{self.attack_bank or 0}",
+                                        "regime": regime}})
         for i in range(self.n):
             ev.append({"type": "client_updated", "data": {"bankId": f"bank{i}",
                        "detection": {"federated": fed[i], "siloed": silo[i]}}})
@@ -130,7 +153,8 @@ class Engine:
         fed, silo = self._det()
         banks = [{"id": f"bank{i}", "name": NAMES[i], "customers": CUST[i],
                   "detection": {"federated": round(fed[i], 3), "siloed": round(silo[i], 3)},
-                  "poisoned": self.attack_bank == i and self.round < 3} for i in range(self.n)]
+                  "poisoned": self.attack_bank == i and self._poison_injected_this_round}
+                 for i in range(self.n)]
         fv = int(self.cum["fed"]); sv = int(self.cum["silo"])
         ttd = lambda a: HOURS * self.round if a >= THRESH else 101.0
         return {"round": self.round, "running": True, "banks": banks,

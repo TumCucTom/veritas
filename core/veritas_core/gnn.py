@@ -176,20 +176,15 @@ def recall(w, sg, thr=0.5, in_dim=None):
 
 
 def auc(w, sg, in_dim=None):
-    """ROC-AUC over OWNED nodes (rank-based, ties averaged)."""
+    """ROC-AUC over OWNED nodes (rank-based, ties averaged).
+
+    Delegates to the single canonical tie-averaged Mann-Whitney AUC in
+    :func:`veritas_core.ensemble.auc` so there is exactly one correct
+    implementation (the previous local copy ranked but did NOT average tied
+    ranks, returning 0.5 instead of 0.625 on tied scores)."""
+    from .ensemble import auc as _auc
     if in_dim is None:
         in_dim = sg.X.shape[1]
     p = predict_proba(w, sg, in_dim)
     owned = sg.owned_mask
-    y = sg.y[owned]
-    s = p[owned]
-    pos = s[y == 1]
-    neg = s[y == 0]
-    if len(pos) == 0 or len(neg) == 0:
-        return 0.5
-    order = np.argsort(s)
-    ranks = np.empty(len(s), dtype=np.float64)
-    ranks[order] = np.arange(1, len(s) + 1)
-    # average ties
-    rpos = ranks[y == 1].sum()
-    return float((rpos - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)))
+    return _auc(p[owned], sg.y[owned])

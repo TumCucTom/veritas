@@ -4,10 +4,10 @@ def fedavg(updates,weights=None):
     if weights is None: return U.mean(axis=0)
     wv=np.array(weights,float); wv/=wv.sum(); return (U*wv[:,None]).sum(axis=0)
 def multi_krum(updates,n_byzantine,m):
-    U=np.stack(updates); n=len(U); k=max(1,n-n_byzantine-2)
-    dist=np.zeros((n,n))
-    for i in range(n):
-        for j in range(i+1,n):
-            d=float(np.sum((U[i]-U[j])**2)); dist[i,j]=dist[j,i]=d
-    scores=[np.sort(dist[i])[1:k+1].sum() for i in range(n)]
-    sel=list(np.argsort(scores)[:m]); return U[sel].mean(axis=0), sel
+    # Thin compatibility shim over the single canonical Krum implementation in
+    # robust.multi_krum_select (which clamps negative squared distances from
+    # floating point). Returns (aggregate, selected_idx) for callers that only
+    # need those two; use robust.multi_krum_select directly for the scores too.
+    from .robust import multi_krum_select
+    agg, sel, _ = multi_krum_select(updates, n_byzantine=n_byzantine, m=m)
+    return agg, sel
