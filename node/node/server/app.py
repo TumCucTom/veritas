@@ -71,12 +71,23 @@ class PredictBody(BaseModel):
 
 class EdgeUpdateBody(BaseModel):
     deviceToken: str
-    update: list[float]
+    update: list[float]            # MASKED (clipped+DP-noised on-device, then masked)
     numExamples: int = 1
+    cohortId: str | None = None    # secure-agg cohort/round id
+    clientId: str | None = None    # device id within the cohort (mask cancellation)
 
 
 class EdgeScoreBody(BaseModel):
     features: list[float]
+
+
+class CohortOpenBody(BaseModel):
+    clientIds: list[str]
+    cohortId: str | None = None
+
+
+class CohortCloseBody(BaseModel):
+    cohortId: str | None = None
 
 
 # ---- outward contract -----------------------------------------------------
@@ -132,13 +143,36 @@ def edge_model() -> dict:
     return runtime.engine.edge_model()
 
 
+@app.post("/edge/v1/cohort/open")
+def edge_cohort_open(body: CohortOpenBody) -> dict:
+    # Open a secure-aggregation cohort and deal pairwise seeds. Production: the
+    # node only relays device X25519 public keys; seeds are derived via DH so
+    # the node never learns them. Reference: trusted-dealer seeds (hex-encoded).
+    table = runtime.engine.open_cohort(body.clientIds, cohort_id=body.cohortId)
+    table["seedTable"] = {k: v.hex() for k, v in table["seedTable"].items()}
+    return table
+
+
 @app.post("/edge/v1/updates")
 def edge_updates(body: EdgeUpdateBody) -> dict:
-    # Secure-aggregate the device update (DP) into the bank edge model in-tenancy;
-    # the per-device update is never stored. deviceToken is ephemeral, not a
-    # customer identifier.
-    runtime.engine.edge_aggregate(np.asarray(body.update, dtype=np.float64), body.numExamples)
+    # The device sends a MASKED update (clipped + DP-noised on-device, then
+    # Bonawitz pairwise-masked). The node only buffers the masked message for
+    # the cohort and can recover the aggregate SUM at close — it NEVER sees,
+    # stores, or can derive any individual device's cleartext update.
+    # deviceToken is ephemeral, not a customer identifier.
+    runtime.engine.edge_aggregate(
+        np.asarray(body.update, dtype=np.float64), body.numExamples,
+        cohort_id=body.cohortId, client_id=body.clientId,
+    )
     return {"accepted": True}
+
+
+@app.post("/edge/v1/cohort/close")
+def edge_cohort_close(_body: CohortCloseBody | None = None) -> dict:
+    # Secure-sum the cohort's masked messages (recovering any dropouts) and fold
+    # the single aggregate into the edge model.
+    runtime.engine.close_cohort()
+    return {"accepted": True, "version": runtime.engine.global_version}
 
 
 @app.post("/edge/v1/score")

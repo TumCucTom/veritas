@@ -11,14 +11,26 @@ export interface EdgeModelResponse {
   weights: Vector;
 }
 
-/** POST /edge/v1/updates request body (per PROTOCOL.md). */
+/** POST /edge/v1/updates request body (per PROTOCOL.md).
+ *
+ * In the secure-aggregation posture the `update` field carries the MASKED
+ * vector (clipped + DP-noised on-device, then pairwise-masked), accompanied by
+ * the cohort/round id and the device's client id within that cohort. The node
+ * can only sum a cohort of these to recover the aggregate — never an
+ * individual cleartext update. When no cohort is configured the SDK falls back
+ * to the DP-only update (cohortId/clientId omitted) for backward compatibility.
+ */
 export interface EdgeUpdateRequest {
   /** Ephemeral enrolment token — NOT a customer identifier. */
   deviceToken: string;
-  /** DP-protected weight delta (length = dim). */
+  /** DP-protected weight delta, MASKED when cohortId is present (length = dim). */
   update: Vector;
   /** Number of local examples the update was trained on (for weighting). */
   numExamples: number;
+  /** Cohort/round id this masked update belongs to (secure-agg posture). */
+  cohortId?: string;
+  /** This device's client id within the cohort (for mask cancellation). */
+  clientId?: string;
 }
 
 export interface EdgeUpdateResponse {

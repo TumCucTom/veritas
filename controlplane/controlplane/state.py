@@ -12,25 +12,46 @@ FedAvg, or DP here. We import `multi_krum` and aggregate the round's deltas.
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import threading
 from dataclasses import dataclass, field
 
 import numpy as np
 
 # Reused FL primitives (core installed editable -> `from veritas_core...`,
-# matching the import style in core/server/app.py).
-from veritas_core.aggregation import multi_krum
+# matching the import style in core/server/app.py). The robust aggregation and
+# DP accounting primitives are NEW, tested core modules — imported, never
+# reimplemented here.
 from veritas_core.data import FEATURE_DIM
+from veritas_core.dp_accountant import RDPAccountant, calibrate_noise_multiplier
 from veritas_core.model import init_weights
+from veritas_core.robust import robust_aggregate
 
 from . import crypto
+from .store import Store
 from .transparency import TransparencyLog
 
 DIM = FEATURE_DIM + 1  # logistic bias term -> 11
 DEFAULT_MIN_UPDATES = 3
 DP_MAX_NORM = 2.0
-DP_SIGMA = 0.05
-N_BYZANTINE = 1
+N_BYZANTINE = int(os.environ.get("VERITAS_N_BYZANTINE", "1"))
+
+# Aggregation method for the global delta. Recommended default for the plane
+# (small n, DP-noised inputs): trimmed_mean. Detection (which NAMES a rejected
+# member) always runs Krum so the poison-rejection contract still holds.
+AGG_METHOD = os.environ.get("VERITAS_AGG_METHOD", "trimmed_mean")
+
+# DP budget configuration (env-overridable). The calibrated sigma is advertised
+# in dpParams so nodes apply the right amount of Gaussian noise.
+DP_EPSILON = float(os.environ.get("VERITAS_DP_EPSILON", "8.0"))
+DP_DELTA = float(os.environ.get("VERITAS_DP_DELTA", "1e-5"))
+DP_ROUNDS = int(os.environ.get("VERITAS_DP_ROUNDS", "50"))
+# Direct noise-multiplier override. When set, σ is used as-is and the TRUE ε it
+# yields over DP_ROUNDS is reported (honest). Used to pick a utility-preserving
+# operating point on the deliberately-tiny reference model, where calibrating
+# for a strict ε produces σ large enough to destroy the toy model — the real
+# privacy/utility tradeoff. Production (larger model + data) calibrates from ε.
+DP_SIGMA_OVERRIDE = os.environ.get("VERITAS_DP_SIGMA")
 
 
 def _now() -> str:
@@ -95,23 +116,88 @@ class RoundResult:
     rejected: list[str]
     global_metrics: dict
     transparency_seq: int
+    silo_recall: float | None = None  # mean reported siloed-baseline recall
 
 
 class ControlPlane:
     """Single source of truth for the reference control plane (in-memory)."""
 
-    def __init__(self, admin_key: str = "dev-admin-key", min_updates: int = DEFAULT_MIN_UPDATES):
+    def __init__(self, admin_key: str = "dev-admin-key",
+                 min_updates: int = DEFAULT_MIN_UPDATES,
+                 db_path: str | None = None,
+                 plane_key_path: str | None = None,
+                 agg_method: str | None = None,
+                 n_byzantine: int | None = None):
         self._lock = threading.RLock()
         self.admin_key = admin_key
         self.min_updates = min_updates
 
-        # Control-plane signing identity (signs the Merkle root).
-        self.plane_priv_pem, self.plane_pub_pem = crypto.generate_keypair()
-        self.transparency = TransparencyLog(self.plane_priv_pem)
+        # Robust-aggregation config (env-overridable, constructor wins for tests).
+        self.agg_method = agg_method or AGG_METHOD
+        self.n_byzantine = N_BYZANTINE if n_byzantine is None else int(n_byzantine)
+
+        # Durable persistence. Tests default to an in-memory DB so existing
+        # ControlPlane(...) construction is unchanged in behaviour.
+        if db_path is None:
+            db_path = os.environ.get("VERITAS_DB", ":memory:")
+        self.store = Store(db_path)
+
+        # Durable control-plane signing identity (signs the Merkle root). A
+        # persisted key keeps the transparency log verifiable across restarts.
+        key_path = plane_key_path
+        if key_path is None:
+            key_path = os.environ.get("VERITAS_PLANE_KEY",
+                                      ":memory:" if self.store.is_memory
+                                      else "plane_key.pem")
+        self.plane_priv_pem, self.plane_pub_pem = crypto.load_or_create_keypair(key_path)
+        self.transparency = TransparencyLog(
+            self.plane_priv_pem, on_append=self.store.persist_transparency)
 
         self.members: dict[str, Member] = {}
+        self.models: dict[int, Model] = {}
+        self.promoted_version = 0
+        self._next_version = 1
+        self.current_round = 1
+        self.round_status = "open"  # open | aggregating | closed
+        self.updates: dict[int, dict[str, Update]] = {1: {}}
+        self.results: dict[int, RoundResult] = {}
+        self._receipt_counter = 0
+        self._round_silo_recall: dict[int, float] = {}  # round -> mean reported
 
-        # Model registry. Version 0 is the genesis (zero) model, promoted.
+        # DP budget: calibrate the noise multiplier for the target (eps, delta)
+        # over the configured rounds, and keep a long-lived RDP accountant that
+        # tracks SPENT epsilon as rounds aggregate.
+        self.dp_delta = DP_DELTA
+        self.dp_rounds = DP_ROUNDS
+        if DP_SIGMA_OVERRIDE is not None:
+            # Operator pinned σ directly: use it, and report the TRUE ε it yields
+            # over the round horizon so /v1/privacy stays honest.
+            self.dp_sigma = float(DP_SIGMA_OVERRIDE)
+            _acct = RDPAccountant()
+            for _ in range(max(1, self.dp_rounds)):
+                _acct.step(self.dp_sigma)
+            self.dp_target_epsilon = round(_acct.get_epsilon(self.dp_delta), 4)
+        else:
+            self.dp_target_epsilon = DP_EPSILON
+            self.dp_sigma = calibrate_noise_multiplier(
+                target_epsilon=self.dp_target_epsilon, delta=self.dp_delta,
+                num_rounds=self.dp_rounds)
+        self._dp_accountant = RDPAccountant()
+        self.dp_spent_epsilon = 0.0
+        self._dp_rounds_spent = 0
+
+        # SSE subscriber queues (asyncio.Queue) keyed by id.
+        self._subscribers: list = []
+
+        # Load prior state from the DB, or seed genesis on a fresh store.
+        loaded = self.store.load_all()
+        if loaded["models"]:
+            self._rehydrate(loaded)
+        else:
+            self._seed_genesis()
+
+    # -- persistence rehydration -----------------------------------------
+    def _seed_genesis(self) -> None:
         genesis = Model(
             version=0,
             weights=[float(x) for x in init_weights(FEATURE_DIM)],
@@ -119,19 +205,61 @@ class ControlPlane:
             status="promoted",
             metrics={"recall": 0.0},
         )
-        self.models: dict[int, Model] = {0: genesis}
-        self.promoted_version = 0
-        self._next_version = 1
+        self.models = {0: genesis}
+        self.store.persist_model(genesis)
+        self.store.persist_meta("plane", self._meta_snapshot())
 
-        # Rounds. Round numbering starts at 1; current round is open.
-        self.current_round = 1
-        self.round_status = "open"  # open | aggregating | closed
-        self.updates: dict[int, dict[str, Update]] = {1: {}}  # round -> memberId -> Update
-        self.results: dict[int, RoundResult] = {}
-        self._receipt_counter = 0
+    def _meta_snapshot(self) -> dict:
+        return {
+            "promoted_version": self.promoted_version,
+            "next_version": self._next_version,
+            "current_round": self.current_round,
+            "receipt_counter": self._receipt_counter,
+            "dp_spent_epsilon": self.dp_spent_epsilon,
+            "dp_rounds_spent": self._dp_rounds_spent,
+        }
 
-        # SSE subscriber queues (asyncio.Queue) keyed by id.
-        self._subscribers: list = []
+    def _rehydrate(self, loaded: dict) -> None:
+        for row in loaded["members"]:
+            self.members[row["member_id"]] = Member(
+                member_id=row["member_id"], display_name=row["display_name"],
+                tenant_id=row["tenant_id"], public_key_pem=row["public_key_pem"],
+                status=row["status"], attestation_quote=row["attestation_quote"],
+                last_sync=row["last_sync"])
+        for row in loaded["models"]:
+            self.models[row["version"]] = Model(
+                version=row["version"], weights=row["weights"],
+                parent_version=row["parent_version"], status=row["status"],
+                metrics=row["metrics"], created_at=row["created_at"])
+        for row in loaded["rounds"]:
+            res = RoundResult(
+                round=row["round"], new_version=row["new_version"],
+                contributors=row["contributors"], rejected=row["rejected"],
+                global_metrics=row["global_metrics"],
+                transparency_seq=row["transparency_seq"],
+                silo_recall=row["silo_recall"])
+            self.results[row["round"]] = res
+            if row["silo_recall"] is not None:
+                self._round_silo_recall[row["round"]] = row["silo_recall"]
+        for entry in loaded["transparency"]:
+            rec = {"seq": entry["seq"], "type": entry["type"],
+                   "data": entry["data"], "timestamp": entry["timestamp"]}
+            if entry["round"] is not None:
+                rec["round"] = entry["round"]
+            rec["leafHash"] = entry["leaf_hash"]
+            self.transparency.load_entry(rec)
+        meta = loaded.get("meta", {}).get("plane", {})
+        self.promoted_version = meta.get("promoted_version", 0)
+        self._next_version = meta.get("next_version", max(self.models) + 1)
+        self.current_round = meta.get("current_round", 1)
+        self._receipt_counter = meta.get("receipt_counter", 0)
+        self.dp_spent_epsilon = meta.get("dp_spent_epsilon", 0.0)
+        self._dp_rounds_spent = meta.get("dp_rounds_spent", 0)
+        # Replay the accountant so spent epsilon stays consistent post-restart.
+        for _ in range(self._dp_rounds_spent):
+            self._dp_accountant.step(self.dp_sigma)
+        self.round_status = "open"
+        self.updates.setdefault(self.current_round, {})
 
     # -- identity ---------------------------------------------------------
     def _tenant_for(self, member_id: str) -> str:
@@ -155,6 +283,7 @@ class ControlPlane:
                 attestation_quote=attestation_quote,
             )
             self.members[member_id] = m
+            self.store.persist_member(m)
             entry = self.transparency.append(
                 "member_enrolled",
                 {"memberId": member_id, "tenantId": m.tenant_id,
@@ -171,6 +300,7 @@ class ControlPlane:
             if m is None:
                 raise KeyError(member_id)
             m.status = "active"
+            self.store.persist_member(m)
             return m
 
     def authenticate(self, token: str) -> Member:
@@ -186,6 +316,7 @@ class ControlPlane:
         if m.status != "active":
             raise PermissionError("member not active")
         m.last_sync = _now()
+        self.store.persist_member(m)
         return m
 
     # -- rounds & models --------------------------------------------------
@@ -195,8 +326,28 @@ class ControlPlane:
                 "round": self.current_round,
                 "globalModelVersion": self.promoted_version,
                 "status": self.round_status,
-                "dpParams": {"maxNorm": DP_MAX_NORM, "sigma": DP_SIGMA},
+                # Calibrated DP params: nodes read dpParams.sigma to noise their
+                # client-side updates to the advertised (epsilon, delta) budget.
+                "dpParams": {
+                    "maxNorm": DP_MAX_NORM,
+                    "sigma": self.dp_sigma,
+                    "epsilon": self.dp_target_epsilon,
+                    "delta": self.dp_delta,
+                },
                 "minUpdates": self.min_updates,
+            }
+
+    def privacy_state(self) -> dict:
+        """DP budget snapshot for GET /v1/privacy."""
+        with self._lock:
+            return {
+                "targetEpsilon": self.dp_target_epsilon,
+                "delta": self.dp_delta,
+                "spentEpsilon": round(self.dp_spent_epsilon, 6),
+                "noiseMultiplier": self.dp_sigma,
+                "roundsSpent": self._dp_rounds_spent,
+                "budgetRemaining": round(
+                    max(0.0, self.dp_target_epsilon - self.dp_spent_epsilon), 6),
             }
 
     def get_model(self, version: int) -> Model:
@@ -249,70 +400,74 @@ class ControlPlane:
                 return None
             return self._aggregate_round(r)
 
-    @staticmethod
-    def _krum_scores(deltas: list, n_byzantine: int):
-        """Per-update Multi-Krum score: sum of squared distances to the k nearest
-        peers (same metric core's multi_krum minimises). A poisoned update sits
-        far from the honest cloud and earns the largest score."""
-        U = np.stack(deltas); n = len(U); k = max(1, n - n_byzantine - 2)
-        dist = np.zeros((n, n))
-        for i in range(n):
-            for j in range(i + 1, n):
-                d = float(np.sum((U[i] - U[j]) ** 2)); dist[i, j] = dist[j, i] = d
-        return np.array([np.sort(dist[i])[1:k + 1].sum() for i in range(n)])
+    def _detect_byzantine(self, deltas: list) -> tuple[list[int], list[int], list]:
+        """Krum-based detection that NAMES rejected members, outlier-gated.
 
-    def _select(self, deltas: list) -> tuple[list[int], list[int]]:
-        """Outlier-gated Multi-Krum selection.
-
-        Reject at most `N_BYZANTINE` updates, and ONLY when they are genuine
-        Krum-score outliers (score >> the honest cloud, via a robust
-        median/MAD test). An all-honest round keeps everyone; a poisoned round
-        drops the poison. Returns (selected_idx, rejected_idx).
+        Runs Multi-Krum (via the core `robust_aggregate(method='krum')`) to get
+        per-update Krum scores and the candidate it would drop. Krum ALWAYS
+        drops `f` members even in an all-honest round, so we do not blindly
+        accuse: a candidate is only reported as `rejected` (-> `attack_detected`)
+        when its Krum score dwarfs the honest cloud (robust ratio test vs. the
+        median of the remaining scores). This keeps an honest round at zero
+        rejections while still NAMING a genuine poisoner (the e2e contract:
+        'evil' must land in `rejected`). Returns (selected, rejected, scores).
         """
         n = len(deltas)
-        # Need at least 4 updates to distinguish a Byzantine outlier from the
-        # honest spread (with n<=3, one honest update inevitably looks "worst"
-        # but isn't a real outlier). Below that, keep everyone.
-        if n < 4:
-            return list(range(n)), []
-        scores = self._krum_scores(deltas, n_byzantine=N_BYZANTINE)
-        order = list(np.argsort(scores))  # ascending: best first
-        rejected: list[int] = []
-        # A genuine poisoned update's Krum score sits FAR above the honest cloud.
-        # Reject the single worst only if it dwarfs the honest baseline (median
-        # of the remaining scores) by a wide margin — a gap/ratio test that is
-        # robust to ties and small n, unlike a MAD z-score.
-        worst = order[-1]
-        rest = [scores[i] for i in order[:-1]]
-        baseline = float(np.median(rest)) or 1e-12
-        if scores[worst] > 10.0 * baseline:
-            rejected.append(int(worst))
-        selected = [i for i in range(n) if i not in rejected]
-        return selected, rejected
+        f = self.n_byzantine
+        # Need enough peers for a meaningful Krum score (n - f - 2 >= 1) AND a
+        # surviving cloud to compare against; below that, keep everyone.
+        if n < f + 3:
+            return list(range(n)), [], []
+        # Detect on RAW deltas (NO norm-clip): an amplified / sign-flipped poison
+        # must stay a visible magnitude outlier here so it gets NAMED. Clipping
+        # belongs in the AGGREGATE step (neutralise the attack), not in detection
+        # (catch + name it). Clipping before scoring would shrink a loud poison to
+        # normal magnitude and, with DP noise inflating the honest baseline, let
+        # it slip under the outlier gate.
+        _, info = robust_aggregate(deltas, method="krum", n_byzantine=f)
+        scores = info.get("scores") or []
+        krum_rejected = info["rejected"]  # the f Krum would drop
+        if not scores or not krum_rejected:
+            return info["selected"], krum_rejected, scores
+        order = list(np.argsort(scores))  # ascending: best (honest) first
+        confirmed: list[int] = []
+        for cand in krum_rejected:
+            rest = [scores[i] for i in order if i != cand]
+            baseline = float(np.median(rest)) or 1e-12
+            # A real poisoned update sits FAR above the honest baseline.
+            if scores[cand] > 10.0 * baseline:
+                confirmed.append(cand)
+        selected = [i for i in range(n) if i not in confirmed]
+        return selected, sorted(confirmed), scores
 
     def _aggregate_round(self, r: int) -> RoundResult:
-        """Run Multi-Krum over the round's updates, reject outliers, apply the
-        aggregate delta to the parent (promoted) model -> new model version.
+        """Robustly aggregate the round's DP-noised deltas and mint a new model.
 
-        Uses `core.veritas_core.aggregation.multi_krum` with n_byzantine=1.
-        Multi-Krum selects the m most-consistent updates (m = n - n_byzantine);
-        members not selected are reported as rejected -> fires attack_detected.
+        Two principled core primitives do the work (imported, never
+        reimplemented):
+          * DETECTION — Multi-Krum (`robust_aggregate(method='krum')`) names any
+            Byzantine outlier so we can report it as `rejected` and fire
+            `attack_detected`.
+          * AGGREGATE — the configured method (default `trimmed_mean`, env
+            `VERITAS_AGG_METHOD`) over the SURVIVING updates produces the global
+            delta, with `max_norm=DP_MAX_NORM` clipping amplification attacks.
         """
         self.round_status = "aggregating"
         items = list(self.updates[r].values())
         member_ids = [u.member_id for u in items]
         deltas = [np.asarray(u.update, dtype=float) for u in items]
-        n = len(deltas)
 
-        selected, rejected_idx = self._select(deltas)
-        # Robust aggregate: Multi-Krum over the SURVIVING updates (it averages
-        # the m most-consistent of them). With no rejection this is FedAvg-like
-        # over all honest updates; with a rejected outlier the poison is gone.
+        selected, rejected_idx, _ = self._detect_byzantine(deltas)
         survivors = [deltas[i] for i in selected]
+
+        # Robust aggregate over survivors. Single survivor -> use it directly;
+        # otherwise run the configured robust aggregator (no further rejection
+        # since detection already removed the Byzantine member).
         if len(survivors) == 1:
             agg = survivors[0]
         else:
-            agg, _ = multi_krum(survivors, n_byzantine=0, m=len(survivors))
+            agg, _ = robust_aggregate(survivors, method=self.agg_method,
+                                      n_byzantine=0, max_norm=DP_MAX_NORM)
 
         contributors = [member_ids[i] for i in selected]
         rejected = [member_ids[i] for i in rejected_idx]
@@ -327,6 +482,17 @@ class ControlPlane:
                    for mid in contributors]
         global_recall = round(float(np.mean(recalls)) if recalls else 0.0, 4)
 
+        # Honest siloed counterfactual: mean of contributors' MEASURED siloed-
+        # baseline recall (`siloRecall`, the cross-team contract). Falls back to
+        # None when no node reported it (older nodes) -> tenant_state degrades
+        # gracefully to the prior heuristic.
+        silo_vals = [self.updates[r][mid].local_metrics.get("siloRecall")
+                     for mid in contributors]
+        silo_vals = [float(v) for v in silo_vals if v is not None]
+        silo_recall = round(float(np.mean(silo_vals)), 4) if silo_vals else None
+        if silo_recall is not None:
+            self._round_silo_recall[r] = silo_recall
+
         version = self._next_version
         self._next_version += 1
         model = Model(
@@ -337,6 +503,7 @@ class ControlPlane:
             metrics={"recall": global_recall},
         )
         self.models[version] = model
+        self.store.persist_model(model)
         model_hash = crypto.leaf_hash(model.weights)
 
         attestation_quotes = {
@@ -360,9 +527,17 @@ class ControlPlane:
         result = RoundResult(
             round=r, new_version=version, contributors=contributors,
             rejected=rejected, global_metrics={"recall": global_recall},
-            transparency_seq=entry["seq"],
+            transparency_seq=entry["seq"], silo_recall=silo_recall,
         )
         self.results[r] = result
+        self.store.persist_round_result(result, silo_recall=silo_recall)
+
+        # Advance the DP budget: one aggregation round consumed the calibrated
+        # Gaussian mechanism once. The long-lived RDP accountant tracks SPENT
+        # epsilon across the federation's lifetime.
+        self._dp_accountant.step(self.dp_sigma)
+        self._dp_rounds_spent += 1
+        self.dp_spent_epsilon = float(self._dp_accountant.get_epsilon(self.dp_delta))
 
         # Fire attack_detected for each rejected member (Multi-Krum dropped it).
         for mid in rejected:
@@ -383,6 +558,7 @@ class ControlPlane:
         self.current_round = r + 1
         self.round_status = "open"
         self.updates.setdefault(self.current_round, {})
+        self.store.persist_meta("plane", self._meta_snapshot())
 
     def get_round_result(self, r: int) -> dict:
         res = self.results.get(r)
@@ -421,6 +597,9 @@ class ControlPlane:
                     other.status = "canary"
             m.status = "promoted"
             self.promoted_version = version
+            for other in self.models.values():
+                self.store.persist_model(other)
+            self.store.persist_meta("plane", self._meta_snapshot())
             entry = self.transparency.append(
                 "model_promoted", {"version": version, "metrics": m.metrics})
             self._publish("model_promoted",
@@ -438,6 +617,9 @@ class ControlPlane:
             target = self.models[reverted_to]
             target.status = "promoted"
             self.promoted_version = reverted_to
+            self.store.persist_model(m)
+            self.store.persist_model(target)
+            self.store.persist_meta("plane", self._meta_snapshot())
             entry = self.transparency.append(
                 "model_rolledback",
                 {"version": version, "revertedTo": reverted_to})
@@ -459,10 +641,18 @@ class ControlPlane:
             promoted = self.models[self.promoted_version]
             fed_recall = float(promoted.metrics.get("recall", 0.0))
             # Siloed counterfactual: a lone bank without federation learns the
-            # cross-institution campaign far more slowly. We model the siloed
-            # recall as a fixed fraction of the federated recall (honest lift
-            # measure: same shape as the hackathon engine's siloed baseline).
-            siloed_recall = round(fed_recall * 0.6, 4)
+            # cross-institution campaign far more slowly. We use the MEASURED
+            # siloed-baseline recall the nodes report each round (`siloRecall`
+            # cross-team contract), averaged over rounds that reported it. If no
+            # node has reported it yet (older nodes), we fall back gracefully to
+            # the prior 0.6x heuristic and flag the source.
+            reported = list(self._round_silo_recall.values())
+            if reported:
+                siloed_recall = round(float(np.mean(reported)), 4)
+                silo_source = "reported"
+            else:
+                siloed_recall = round(fed_recall * 0.6, 4)
+                silo_source = "heuristic"
             at_risk, avg_loss = 1500, 255
             fed_victims = int(at_risk * (1 - fed_recall))
             silo_victims = int(at_risk * (1 - siloed_recall))
@@ -482,7 +672,8 @@ class ControlPlane:
                     "federated": {"recall": fed_recall, "victims": fed_victims,
                                   "lostGbp": fed_victims * avg_loss},
                     "siloed": {"recall": siloed_recall, "victims": silo_victims,
-                               "lostGbp": silo_victims * avg_loss},
+                               "lostGbp": silo_victims * avg_loss,
+                               "source": silo_source},
                     "fraudPreventedGbp": fraud_prevented,
                 },
             }

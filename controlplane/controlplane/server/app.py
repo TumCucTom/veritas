@@ -17,7 +17,10 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ..state import ControlPlane
-from ..transparency import verify_inclusion_proof  # noqa: F401 (re-exported for tests)
+from ..transparency import (  # noqa: F401 (re-exported for tests)
+    verify_consistency_proof,
+    verify_inclusion_proof,
+)
 
 ADMIN_KEY = os.environ.get("VERITAS_ADMIN_KEY", "dev-admin-key")
 # Auto-aggregation threshold. Deployments/integration tests can raise this so
@@ -203,6 +206,25 @@ def transparency_proof(seq: int):
         return plane.transparency.inclusion_proof(seq)
     except IndexError as exc:
         raise HTTPException(status_code=404, detail="seq out of range") from exc
+
+
+@app.get("/v1/transparency/consistency")
+def transparency_consistency(first: int, second: int):
+    """RFC-6962-style consistency proof: the size-`first` tree is an untouched
+    prefix of the size-`second` tree (append-only-ness across checkpoints)."""
+    try:
+        return plane.transparency.consistency_proof(first, second)
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Differential-privacy budget
+# ---------------------------------------------------------------------------
+@app.get("/v1/privacy")
+def privacy():
+    """Live DP budget: calibrated noise multiplier + spent/remaining epsilon."""
+    return plane.privacy_state()
 
 
 # ---------------------------------------------------------------------------

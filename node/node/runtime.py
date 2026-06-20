@@ -104,9 +104,11 @@ class NodeRuntime:
 
     def federate_once(self) -> dict:
         X, y = self.engine.train_X, self.engine.train_y
-        result = self.client.run_round(X, y)
-        # Advance the siloed counterfactual in lock-step so the lift is comparable.
+        # Advance the siloed counterfactual FIRST so siloRecall is a freshly
+        # measured number off the trained baseline (honest-metrics contract).
         self.engine.train_silo_step()
+        silo_recall = self.engine.silo_recall()
+        result = self.client.run_round(X, y, silo_recall=silo_recall)
         # Sync the new global model back into the engine.
         gw, ver = self.client.pull_global()
         self.engine.set_global(gw, ver)

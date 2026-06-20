@@ -66,6 +66,30 @@ def generate_keypair() -> tuple[str, str]:
     return priv_pem, pub_pem
 
 
+def load_or_create_keypair(path: str) -> tuple[str, str]:
+    """Return (private_pem, public_pem), loading from `path` or generating once.
+
+    Persists the control-plane Ed25519 signing identity so the transparency log
+    stays verifiable across restarts (an ephemeral key would invalidate every
+    previously-published signed root). The PEM file is written ``0600``. A
+    ``:memory:`` path is treated as ephemeral (generate, never persist) for
+    tests.
+    """
+    import os
+    if path == ":memory:":
+        return generate_keypair()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as fh:
+            priv_pem = fh.read()
+        return priv_pem, public_pem_of(priv_pem)
+    priv_pem, pub_pem = generate_keypair()
+    # Write 0600 (owner read/write only).
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(priv_pem)
+    return priv_pem, pub_pem
+
+
 def load_private_key(pem: str) -> Ed25519PrivateKey:
     return serialization.load_pem_private_key(pem.encode(), password=None)
 

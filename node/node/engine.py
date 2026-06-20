@@ -16,14 +16,19 @@ node is runnable and testable standalone. All FL math is reused from core.
 from __future__ import annotations
 
 import threading
+import uuid
 
 import numpy as np
 
 from veritas_core.data import FEATURE_DIM, inject_campaign, make_bank_data
-from veritas_core.dp import privatize
 from veritas_core.model import init_weights, predict_proba, recall, train_local
+from veritas_core.secure_agg import (
+    establish_pairwise_seeds,
+    recover_dropout,
+    secure_sum,
+)
 
-from .config import EPOCHS, LR, MAX_NORM, NodeConfig, SIGMA
+from .config import EPOCHS, LR, NodeConfig
 
 # Business constants mirror core/veritas_core/engine.py so the single-bank
 # counterfactual reads consistently with the multi-bank demo.
@@ -62,8 +67,20 @@ class NodeEngine:
         self.round = 0
         self.campaign_active = False
         self.cum = {"fed": 0.0, "silo": 0.0}
-        # Edge secure-aggregation accumulator (DP-summed; per-device never stored)
-        self._edge_updates_seen = 0
+
+        # ---- edge secure-aggregation (Bonawitz pairwise masking) state -----
+        # The bank node is the cohort dealer/relay (production: relays X25519
+        # public keys; here it deals the per-pair seeds). For an OPEN cohort it
+        # buffers ONLY the masked device messages it receives — it never sees,
+        # stores, or can derive any individual device's cleartext update. On
+        # close it secure-sums the masked messages (recovering dropouts) and
+        # folds the single aggregate into ``edge_w``.
+        self._cohort_id: str | None = None
+        self._cohort_client_ids: list[str] = []          # planned cohort membership
+        self._cohort_seed_table: dict = {}               # per-pair seeds (dealer)
+        self._cohort_masked: dict[str, np.ndarray] = {}  # clientId -> masked vector
+        self._edge_cohorts_aggregated = 0                # closed-cohort counter
+        self._edge_updates_seen = 0                      # device messages buffered
 
     # ---- campaign (demo toggle, same semantics as core) ------------------
 
@@ -110,30 +127,130 @@ class NodeEngine:
         silo = recall(self.silo_w, self.eval_X, self.eval_y)
         return float(fed), float(silo)
 
+    def silo_recall(self) -> float:
+        """Measured recall of the SILOED baseline on the held-out eval set.
+
+        This is the honest siloed counterfactual the node reports as
+        ``localMetrics.siloRecall`` (advance ``train_silo_step`` first so it is
+        meaningful).
+        """
+        with self._lock:
+            return float(recall(self.silo_w, self.eval_X, self.eval_y))
+
     def predict(self, features: np.ndarray, *, weights: np.ndarray | None = None) -> tuple[str, float]:
         w = self.global_w if weights is None else weights
         p = float(predict_proba(w, features.reshape(1, -1))[0])
         return ("fraud" if p >= 0.5 else "legitimate", p)
 
-    # ---- edge secure-aggregation (Tier 0 → bank, in-tenancy) -------------
+    # ---- edge secure-aggregation (Tier 0 → bank, Bonawitz masked sum) -----
 
-    def edge_aggregate(self, update: np.ndarray, num_examples: int) -> None:
-        """Secure-aggregate ONE device update into the bank edge model with DP.
+    def open_cohort(self, client_ids: list[str], *, cohort_id: str | None = None,
+                    master_rng: np.random.Generator | None = None) -> dict:
+        """Open a secure-aggregation cohort and deal pairwise seeds.
 
-        We never store the per-device update: it is DP-privatized and folded
-        straight into ``edge_w``. ``num_examples`` weights the step. This is the
-        DP-only secure-aggregation posture (v1) from the spec; a Bonawitz-style
-        masked sum is the production upgrade.
+        The node plays cohort dealer/relay: it fixes the cohort membership and
+        establishes the pairwise seed table. In PRODUCTION the node only relays
+        device X25519 public keys and the per-pair seeds ``s_ij`` are derived
+        independently by each device via authenticated Diffie-Hellman, so the
+        node NEVER learns a seed and is structurally unable to unmask an
+        individual. THIS REFERENCE deals the seeds locally (trusted-dealer
+        stand-in) so the masking algebra runs end-to-end without a crypto dep.
+
+        Each device receives its ``clientId``, peer list, and the seeds for the
+        pairs that include it. Returns the dealer assignment table.
+        """
+        with self._lock:
+            ids = list(client_ids)
+            if len(set(ids)) != len(ids):
+                raise ValueError("cohort client_ids must be unique")
+            self._cohort_id = cohort_id or uuid.uuid4().hex
+            self._cohort_client_ids = ids
+            rng = master_rng if master_rng is not None else self.rng
+            self._cohort_seed_table = establish_pairwise_seeds(ids, master_rng=rng)
+            self._cohort_masked = {}
+            return {
+                "cohortId": self._cohort_id,
+                "clientIds": ids,
+                # per-pair seeds, exposed so each device can mask against peers
+                "seedTable": {f"{a}|{b}": s for (a, b), s in self._cohort_seed_table.items()},
+            }
+
+    def edge_aggregate(self, update: np.ndarray, num_examples: int,
+                       *, cohort_id: str | None = None, client_id: str | None = None) -> None:
+        """Buffer ONE device's MASKED update for the open cohort.
+
+        The bank node never sees an individual device's cleartext update: the
+        device has already clipped + DP-noised its delta CLIENT-SIDE and then
+        applied Bonawitz pairwise masks. We only store the masked vector keyed
+        by ``client_id``; the masks make it look uniformly random. DP is NOT
+        applied here (it happened on-device before masking) — the node only
+        ever sums. The cohort is closed (secure-summed and folded) by
+        ``close_cohort``.
+
+        ``num_examples`` is accepted for API compatibility but no longer used to
+        re-weight a single message (weighting is uniform within a secure sum).
+
+        If no cohort is open we open a singleton-cohort for this client so the
+        masked message is still never un-masked individually; with one client
+        the secure sum is the (DP) update itself, which is the legacy behaviour.
         """
         with self._lock:
             u = np.asarray(update, dtype=np.float64)
             if u.shape != self.edge_w.shape:
                 raise ValueError(f"edge update dim {u.shape} != model dim {self.edge_w.shape}")
-            priv = privatize(u, MAX_NORM, SIGMA, self.rng)
-            # weight by example count, normalised against a nominal batch
-            scale = min(1.0, max(1, num_examples) / 64.0)
-            self.edge_w = self.edge_w + scale * priv
+            cid = client_id or f"dev-{len(self._cohort_masked)}"
+            if self._cohort_id is None:
+                # Auto-open a degenerate cohort (no peers => mask is the update).
+                self.open_cohort([cid], cohort_id=cohort_id)
+            if cohort_id is not None and cohort_id != self._cohort_id:
+                raise ValueError(
+                    f"update for cohort {cohort_id!r} but open cohort is {self._cohort_id!r}")
+            # Store ONLY the masked vector. Never store/derive the cleartext.
+            self._cohort_masked[cid] = u
             self._edge_updates_seen += 1
+
+    def close_cohort(self) -> np.ndarray:
+        """Secure-sum the buffered masked messages and fold the aggregate in.
+
+        Computes ``secure_sum`` over the masked messages actually received. If
+        some planned cohort members dropped out (never submitted), their
+        pairwise masks no longer cancel; ``recover_dropout`` subtracts those
+        leftover masks (production: their seeds are reconstructed via Shamir from
+        surviving shares; here from the dealer's seed table) so the result is the
+        true SUM over the SURVIVORS only. The single aggregate — never any
+        individual update — is then folded into ``edge_w``.
+
+        Returns the recovered aggregate (for tests/inspection).
+        """
+        with self._lock:
+            if not self._cohort_masked:
+                self._reset_cohort()
+                return np.zeros_like(self.edge_w)
+            survivors = list(self._cohort_masked.keys())
+            masked_vecs = [self._cohort_masked[c] for c in survivors]
+            agg = secure_sum(masked_vecs)
+            planned = self._cohort_client_ids or survivors
+            dropped = [c for c in planned if c not in self._cohort_masked]
+            if dropped:
+                agg = recover_dropout(
+                    agg, dropped, survivors, self._cohort_seed_table, dim=self.edge_w.shape[0])
+            # Fold the single aggregate into the edge model. Normalise by the
+            # number of surviving contributors so the step is scale-stable.
+            n = max(1, len(survivors))
+            self.edge_w = self.edge_w + agg / n
+            self._edge_cohorts_aggregated += 1
+            self._reset_cohort()
+            return agg
+
+    def _reset_cohort(self) -> None:
+        self._cohort_id = None
+        self._cohort_client_ids = []
+        self._cohort_seed_table = {}
+        self._cohort_masked = {}
+
+    @property
+    def cohort_open(self) -> bool:
+        return self._cohort_id is not None
 
     def edge_model(self) -> dict:
         with self._lock:
@@ -168,6 +285,8 @@ class NodeEngine:
                     "tenantId": self.cfg.tenant_id,
                     "modelVersion": self.global_version,
                     "edgeUpdatesAggregated": self._edge_updates_seen,
+                    "edgeCohortsAggregated": self._edge_cohorts_aggregated,
+                    "cohortOpen": self._cohort_id is not None,
                 },
                 "counters": {
                     "federated": {

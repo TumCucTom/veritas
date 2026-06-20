@@ -1,0 +1,6 @@
+# Durable runtime state (write-through SQLite + signing identity)
+controlplane.db
+controlplane.db-journal
+*.db
+*.db-journal
+plane_key.pem

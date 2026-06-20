@@ -76,7 +76,9 @@ class FederationClient:
 
     # ---- one round -------------------------------------------------------
 
-    def run_round(self, X: np.ndarray, y: np.ndarray) -> RoundResult:
+    def run_round(
+        self, X: np.ndarray, y: np.ndarray, *, silo_recall: float | None = None
+    ) -> RoundResult:
         if not self.enrolled:
             self.enroll()
 
@@ -105,12 +107,19 @@ class FederationClient:
 
         quote = self.attestor.attest()
         token = self.identity.mint_jwt()
+        # Honest-metrics contract: report BOTH the federated recall and the
+        # MEASURED siloed-baseline recall. The control plane consumes
+        # ``siloRecall`` to replace its hardcoded counterfactual; the field name
+        # is the agreed cross-team contract.
+        local_metrics = {"recall": round(float(local_recall), 4)}
+        if silo_recall is not None:
+            local_metrics["siloRecall"] = round(float(silo_recall), 4)
         body = {
             "memberId": self.identity.member_id,
             "round": round_no,
             "update": priv.tolist(),
             "numExamples": int(len(y)),
-            "localMetrics": {"recall": round(float(local_recall), 4)},
+            "localMetrics": local_metrics,
             "attestationQuote": quote.to_wire(),
         }
         try:

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { Veritas, MODEL_DIM } from "../src/index.js";
+import {
+  Veritas,
+  MODEL_DIM,
+  maskUpdate,
+  pairKey,
+} from "../src/index.js";
+import type { CohortAssignment } from "../src/index.js";
 import { FakeNode } from "./fakeNode.js";
 
 const FRAUD = {
@@ -100,5 +106,59 @@ describe("contributeUpdate", () => {
     // sent != rawDelta because of clipping/noise
     const identical = rawDelta.every((d, i) => d === sent[i]);
     expect(identical).toBe(false);
+  });
+});
+
+describe("secure aggregation (masked cohort contribution)", () => {
+  // Two-device cohort sharing one pairwise seed; the node is the dealer/relay.
+  function cohort(): { a: CohortAssignment; b: CohortAssignment } {
+    const seed = 0x1234abcd;
+    const seeds = { [pairKey("devA", "devB")]: seed };
+    return {
+      a: { cohortId: "c1", clientId: "devA", peerIds: ["devB"], seeds },
+      b: { cohortId: "c1", clientId: "devB", peerIds: ["devA"], seeds },
+    };
+  }
+
+  it("sends a MASKED update that differs from the raw DP update on the wire", async () => {
+    const { a } = cohort();
+
+    // Device with NO cohort: sends the DP-only update.
+    const plain = new FakeNode();
+    const vPlain = Veritas.start({ transport: plain, seed: 7, seedEvents: 400 });
+    await vPlain.contributeUpdate();
+    const dpUpdate = plain.received[0]!.update;
+
+    // Same device + data, but masked for the cohort: the wire payload differs.
+    const masked = new FakeNode();
+    const vMasked = Veritas.start({ transport: masked, seed: 7, seedEvents: 400 });
+    await vMasked.contributeUpdate({ cohort: a });
+    const sent = masked.received[0]!;
+
+    expect(sent.cohortId).toBe("c1");
+    expect(sent.clientId).toBe("devA");
+    // Masked != DP-only: a large pairwise mask was added.
+    const identical = sent.update.every((x, i) => x === dpUpdate[i]);
+    expect(identical).toBe(false);
+    // The mask dominates -> the on-wire vector is huge vs the ~O(1) DP update.
+    const maskedNorm = Math.sqrt(sent.update.reduce((s, x) => s + x * x, 0));
+    const dpNorm = Math.sqrt(dpUpdate.reduce((s, x) => s + x * x, 0));
+    expect(maskedNorm).toBeGreaterThan(dpNorm * 100);
+    // still no raw events / PII on the wire
+    expect(JSON.stringify(sent)).not.toMatch(/payeeId|amount|observedAt|events/i);
+  });
+
+  it("two devices' masks cancel so the cohort sum recovers the DP aggregate", () => {
+    // The device-side masking algebra: maskA + maskB == dpA + dpB exactly.
+    const { a, b } = cohort();
+    const dpA = [1, 2, 3, -1];
+    const dpB = [0.5, -2, 1, 4];
+    const mA = maskUpdate(dpA, a.clientId, a.peerIds, a.seeds);
+    const mB = maskUpdate(dpB, b.clientId, b.peerIds, b.seeds);
+    const sum = mA.map((x, i) => x + mB[i]!);
+    const trueSum = dpA.map((x, i) => x + dpB[i]!);
+    sum.forEach((s, i) => expect(s).toBeCloseTo(trueSum[i]!, 6));
+    // each individual masked vector is NOT the cleartext (mask dominates)
+    expect(mA.every((x, i) => x === dpA[i])).toBe(false);
   });
 });

@@ -68,11 +68,34 @@ def test_edge_secure_aggregation_moves_edge_model():
     client = _app(rt)
     before = np.asarray(client.get("/edge/v1/model").json()["weights"])
     dim = len(before)
-    update = [0.5] * dim
-    resp = client.post("/edge/v1/updates", json={"deviceToken": "ephemeral-xyz", "update": update, "numExamples": 64})
-    assert resp.json()["accepted"] is True
+
+    # Open a cohort of two devices and deal pairwise seeds.
+    opened = client.post(
+        "/edge/v1/cohort/open", json={"clientIds": ["devA", "devB"]}).json()
+    cohort = opened["cohortId"]
+
+    # Each device masks its (DP) update before sending; the node only ever sees
+    # the masked vectors. We reconstruct the masks here to post the masked wire
+    # payloads, mirroring what the SDK does on-device.
+    from veritas_core.secure_agg import mask_update
+    seeds = {tuple(k.split("|")): bytes.fromhex(v) for k, v in opened["seedTable"].items()}
+    uA = np.array([0.5] * dim)
+    uB = np.array([0.2] * dim)
+    mA = mask_update(uA, "devA", ["devB"], seeds)
+    mB = mask_update(uB, "devB", ["devA"], seeds)
+
+    for cid, mv in (("devA", mA), ("devB", mB)):
+        resp = client.post("/edge/v1/updates", json={
+            "deviceToken": f"ephemeral-{cid}", "update": mv.tolist(),
+            "numExamples": 64, "cohortId": cohort, "clientId": cid})
+        assert resp.json()["accepted"] is True
+
+    client.post("/edge/v1/cohort/close", json={"cohortId": cohort})
     after = np.asarray(client.get("/edge/v1/model").json()["weights"])
     assert np.linalg.norm(after - before) > 0       # the edge model moved
+    # The folded delta equals the secure SUM (uA+uB)/n, NOT either individual.
+    expected = (uA + uB) / 2.0
+    assert np.allclose(after - before, expected, atol=1e-6)
 
 
 def test_edge_score_returns_label():

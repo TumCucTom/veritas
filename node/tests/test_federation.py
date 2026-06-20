@@ -70,3 +70,43 @@ def test_two_rounds_advance_version():
     assert r2.round == r1.round + 1
     assert plane.global_version == 2
     assert plane.enroll_count == 1          # still only enrolled once
+
+
+def test_node_consumes_plane_calibrated_sigma():
+    """The node uses dpParams.sigma from the plane, not the hardcoded fallback."""
+    from node.config import SIGMA
+    # Plane advertises a calibrated sigma distinct from the node's fallback.
+    calibrated = SIGMA + 0.37
+    plane = FakePlane(min_updates=1, sigma=calibrated)
+    rnd = plane.get_current_round()
+    assert rnd["dpParams"]["sigma"] == calibrated
+    # The client reads dpParams.sigma and feeds it to privatize(...): with a
+    # larger sigma the DP noise (hence update norm) is meaningfully larger than
+    # under the hardcoded fallback for the same training delta.
+    X, y = make_bank_data(1500, 0.05, seed=11)
+    big = _client(plane).run_round(X, y)
+    plane_lo = FakePlane(min_updates=1, sigma=0.0)  # no noise baseline
+    small = _client(plane_lo).run_round(X, y)
+    assert big.update_norm > small.update_norm
+
+
+def test_localmetrics_includes_measured_silo_recall():
+    """federate_once submits BOTH recall and a measured siloRecall."""
+    import numpy as np
+
+    from node.config import NodeConfig
+    from node.runtime import NodeRuntime
+
+    plane = FakePlane(min_updates=1, sigma=0.0)
+    cfg = NodeConfig(node_id="node0", node_index=0, seed=0, autostart_federation=False)
+    rt = NodeRuntime(cfg, transport=plane)
+    rt.federate_once()
+
+    body = plane.last_update_body
+    assert body is not None
+    lm = body["localMetrics"]
+    assert "recall" in lm and "siloRecall" in lm
+    # siloRecall is the engine's measured siloed-baseline recall (not hardcoded).
+    measured = rt.engine.silo_recall()
+    assert abs(lm["siloRecall"] - round(float(measured), 4)) < 1e-9
+    assert 0.0 <= lm["siloRecall"] <= 1.0

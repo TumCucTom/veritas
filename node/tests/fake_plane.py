@@ -35,6 +35,7 @@ class FakePlane:
         self.transparency: list[dict] = []
         self.enroll_count = 0
         self.update_count = 0
+        self.last_update_body: dict | None = None  # captured for metric assertions
 
     # ---- transport surface (matches node.federation.transport.PlaneTransport) ----
 
@@ -81,6 +82,7 @@ class FakePlane:
         assert claims["tid"] == member["tenantId"], "JWT tid must match tenant"
 
         self.update_count += 1
+        self.last_update_body = body
         self._round_updates.setdefault(round_no, []).append(np.asarray(body["update"], dtype=np.float64))
         if len(self._round_updates[round_no]) >= self.min_updates:
             self._aggregate(round_no)

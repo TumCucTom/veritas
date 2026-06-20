@@ -30,6 +30,13 @@ ADMIN_KEY="${VERITAS_ADMIN_KEY:-dev-admin-key}"
 MIN_UPDATES="${VERITAS_MIN_UPDATES:-3}"
 AUTOSTART="${VERITAS_AUTOSTART_FEDERATION:-1}"
 POLL_INTERVAL="${VERITAS_POLL_INTERVAL:-2}"
+# Demo operating point: pin a utility-preserving noise multiplier on the tiny
+# 11-dim reference model. The DP accounting is still rigorous — /v1/privacy
+# reports the TRUE ε this σ yields. Strict-privacy default (calibrate σ from
+# ε=8) is correct for production-scale models but destroys this toy model, the
+# real privacy/utility tradeoff. Override with VERITAS_DP_SIGMA=... for a demo,
+# or unset + set VERITAS_DP_EPSILON to exercise full ε-calibration.
+DP_SIGMA="${VERITAS_DP_SIGMA:-0.1}"
 PLANE_PORT=9000
 PLANE_URL="http://localhost:${PLANE_PORT}"
 
@@ -55,6 +62,7 @@ up() {
     # shellcheck disable=SC1091
     . .venv/bin/activate
     VERITAS_ADMIN_KEY="$ADMIN_KEY" VERITAS_MIN_UPDATES="$MIN_UPDATES" \
+      VERITAS_DP_SIGMA="$DP_SIGMA" \
       nohup uvicorn controlplane.server.app:app --port "$PLANE_PORT" \
       > "$LOG_DIR/controlplane.log" 2>&1 &
     echo $! > "$PID_DIR/controlplane.pid"

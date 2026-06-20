@@ -37,6 +37,8 @@ import type {
   EdgeUpdateResponse,
   Transport,
 } from "./transport.js";
+import { maskUpdate } from "./secureAgg.js";
+import type { CohortAssignment } from "./secureAgg.js";
 import { Rng } from "./rng.js";
 
 export interface VeritasConfig {
@@ -182,10 +184,19 @@ export class Veritas {
 
   /**
    * Train locally on the device buffer, DP-protect the weight DELTA (clip +
-   * Gaussian noise), and POST it to the node. RAW EVENTS ARE NEVER INCLUDED in
-   * the payload — only the noised delta + a count.
+   * Gaussian noise), optionally MASK it for secure aggregation, and POST it to
+   * the node. RAW EVENTS ARE NEVER INCLUDED in the payload — only the noised
+   * (and, under secure-agg, masked) delta + a count.
+   *
+   * When `opts.cohort` is provided the device performs Bonawitz-style pairwise
+   * masking on top of its DP update, so the bank node sees only the masked
+   * vector and can only ever recover the cohort SUM — never this device's
+   * individual update. Without a cohort, the DP-only update is sent (legacy
+   * posture, still privacy-preserving via DP but visible per-device).
    */
-  async contributeUpdate(opts: { epochs?: number } = {}): Promise<ContributeResult> {
+  async contributeUpdate(
+    opts: { epochs?: number; cohort?: CohortAssignment } = {},
+  ): Promise<ContributeResult> {
     if (!this.transport) {
       throw new Error("No transport configured: pass nodeUrl or transport.");
     }
@@ -199,19 +210,34 @@ export class Veritas {
     this.weights = trained; // keep the improved local model
 
     const rawDelta = subtract(trained, base);
-    const update = privatize(rawDelta, this.dp.maxNorm, this.dp.sigma, this.rng);
+    // DP happens CLIENT-SIDE: clip + Gaussian noise the delta.
+    const dpUpdate = privatize(rawDelta, this.dp.maxNorm, this.dp.sigma, this.rng);
 
-    const body: EdgeUpdateRequest = {
-      deviceToken: this.deviceToken,
-      update,
-      numExamples: y.length,
-    };
+    // Secure aggregation: mask the DP update so the node never sees it in clear.
+    const body: EdgeUpdateRequest = opts.cohort
+      ? {
+          deviceToken: this.deviceToken,
+          update: maskUpdate(
+            dpUpdate,
+            opts.cohort.clientId,
+            opts.cohort.peerIds,
+            opts.cohort.seeds,
+          ),
+          numExamples: y.length,
+          cohortId: opts.cohort.cohortId,
+          clientId: opts.cohort.clientId,
+        }
+      : {
+          deviceToken: this.deviceToken,
+          update: dpUpdate,
+          numExamples: y.length,
+        };
     const response = await this.transport.postUpdate(body);
 
     return {
       sent: response.accepted !== false,
       numExamples: y.length,
-      updateNorm: Math.sqrt(update.reduce((s, v) => s + v * v, 0)),
+      updateNorm: Math.sqrt(body.update.reduce((s, v) => s + v * v, 0)),
       localRecall: recall(trained, X, y),
       response,
     };

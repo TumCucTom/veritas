@@ -34,3 +34,10 @@ export type {
   FetchTransportOpts,
 } from "./transport.js";
 export { Rng } from "./rng.js";
+export {
+  maskUpdate,
+  derivePairwiseMask,
+  pairKey,
+  MASK_SCALE,
+} from "./secureAgg.js";
+export type { SeedTable, CohortAssignment } from "./secureAgg.js";
