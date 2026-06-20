@@ -1,3 +1,10 @@
+// Frozen fallback for the headline federated-GNN mule-graph benchmark.
+//
+// These constants are NOT hand-tuned: they are the REAL output of
+//   core/veritas_core/gnn_benchmark.compute_gnn_benchmark(seed=0)
+// (which the live backends serve in /state). Regenerate by running that
+// function and pasting metrics/graph/roundTrajectory here so the mock fallback
+// can never drift from the real numbers.
 const FINAL = {
   siloedRecall: 0.5142328861369109,
   federatedRecall: 0.8068455452356381,
@@ -26,27 +33,54 @@ const TRAINING = {
   verification: "VSA bounded-norm proof",
 };
 
+// REAL per-round federated recall trajectory measured by the numpy GNN.
+const ROUND_TRAJECTORY = [
+  0.37650498796009635, 0.5432576539387685, 0.5834623323013416,
+  0.6391038871689027, 0.6947454420364637, 0.6947454420364637,
+  0.7086343309253527, 0.7642758857929136, 0.7789817681458548,
+  0.7789817681458548, 0.7789817681458548, 0.7789817681458548,
+  0.7789817681458548, 0.793687650498796, 0.7789817681458548,
+  0.7789817681458548, 0.7921396628826969, 0.8068455452356381,
+  0.8068455452356381, 0.8068455452356381, 0.8068455452356381,
+  0.8068455452356381, 0.8068455452356381, 0.8068455452356381,
+  0.8068455452356381,
+];
+
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-function easeOut(value) {
-  return 1 - Math.pow(1 - clamp01(value), 3);
+// Federated recall read off the REAL trajectory, indexed/interpolated by the
+// live round vs TRAINING.rounds. Mirrors gnn_benchmark.benchmark_current so the
+// fallback matches the backend's live `current` block.
+function federatedRecallAt(round, campaignActive) {
+  const traj = ROUND_TRAJECTORY;
+  if (!campaignActive || round <= 0) return traj[0];
+  const pos = Math.min(round, TRAINING.rounds);
+  const f = pos - 1;
+  if (f <= 0) return traj[0];
+  if (f >= traj.length - 1) return traj[traj.length - 1];
+  const lo = Math.floor(f);
+  const frac = f - lo;
+  return traj[lo] * (1 - frac) + traj[lo + 1] * frac;
 }
 
 export function gnnBenchmark(round = 0, campaignActive = false) {
-  const progress = campaignActive ? easeOut(round / TRAINING.rounds) : 0;
+  const r = Math.max(0, round);
+  const progress = clamp01(r / TRAINING.rounds);
+  const federatedRecall = federatedRecallAt(r, campaignActive);
   return {
     source: SOURCE,
     graph: GRAPH,
     training: TRAINING,
     metrics: FINAL,
+    roundTrajectory: ROUND_TRAJECTORY,
     current: {
-      round: Math.max(0, round),
+      round: r,
       progress,
       siloedRecall: FINAL.siloedRecall,
-      federatedRecall: 0.36 + (FINAL.federatedRecall - 0.36) * progress,
-      recallLift: (FINAL.federatedRecall - FINAL.siloedRecall) * progress,
+      federatedRecall,
+      recallLift: federatedRecall - FINAL.siloedRecall,
     },
   };
 }

@@ -21,6 +21,7 @@ import uuid
 import numpy as np
 
 from veritas_core.data import FEATURE_DIM, inject_campaign, make_bank_data
+from veritas_core.gnn_benchmark import benchmark_current, compute_gnn_benchmark
 from veritas_core.model import init_weights, predict_proba, recall, train_local
 from veritas_core.secure_agg import (
     establish_pairwise_seeds,
@@ -81,6 +82,20 @@ class NodeEngine:
         self._cohort_masked: dict[str, np.ndarray] = {}  # clientId -> masked vector
         self._edge_cohorts_aggregated = 0                # closed-cohort counter
         self._edge_updates_seen = 0                      # device messages buffered
+
+        # Real federated-GNN mule-graph benchmark (the headline siloed-vs-federated
+        # contrast). It TRAINS a numpy GNN, which takes a few seconds, so compute
+        # it ONCE in a background thread at startup; until ready state() omits
+        # gnnBenchmark (the web shows "GNN pending"). The live `current` block is
+        # built per state() call from the REAL round trajectory, keyed on this
+        # node's round / campaign flag.
+        self._gnn_benchmark: dict | None = None
+        threading.Thread(target=self._compute_gnn_benchmark, daemon=True).start()
+
+    def _compute_gnn_benchmark(self) -> None:
+        b = compute_gnn_benchmark(seed=0)
+        with self._lock:
+            self._gnn_benchmark = b
 
     # ---- campaign (demo toggle, same semantics as core) ------------------
 
@@ -273,7 +288,7 @@ class NodeEngine:
                 "detection": {"federated": round(fed, 3), "siloed": round(silo, 3)},
                 "poisoned": False,
             }
-            return {
+            state = {
                 "round": self.round,
                 "running": True,
                 "banks": [bank],
@@ -303,6 +318,12 @@ class NodeEngine:
                     },
                 },
             }
+            if self._gnn_benchmark is not None:
+                b = dict(self._gnn_benchmark)
+                b["current"] = benchmark_current(
+                    self._gnn_benchmark, self.round, self.campaign_active)
+                state["gnnBenchmark"] = b
+            return state
 
     def accrue_counters(self) -> None:
         """Advance the running victim/loss totals one round (federated vs siloed)."""
