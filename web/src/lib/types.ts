@@ -69,6 +69,18 @@ export interface Provenance {
   globalRecall: number;
 }
 export type Regime = "federated" | "siloed";
+
+// Scoring contract for the engine /predict route. The transaction is the
+// whitelisted numeric feature vector (camelCase, mirrors the contract).
+export interface PredictRequest {
+  transaction: Record<string, number>;
+}
+export interface PredictResponse {
+  label: string;
+  confidence: number;
+  indicators: string[];
+}
+
 export type VeritasEvent =
   | { type: "round_complete"; data: State }
   | { type: "client_updated"; data: { bankId: string; detection: Detection } }

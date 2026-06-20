@@ -1,5 +1,5 @@
 "use client";
-import PopulationCanvas from "./PopulationCanvas";
+import PopulationCanvas, { POPULATION_DOTS } from "./PopulationCanvas";
 import { useVeritas } from "../lib/store";
 import { meanDetection } from "../lib/derive";
 import { formatGbp, formatNumber, formatTimeToDetect, isDetected } from "../lib/format";
@@ -42,6 +42,12 @@ export default function RacePanel({ regime }: Props) {
 
   const accent = isFed ? "var(--fed)" : "var(--silo)";
   const pct = Math.round(avg * 100);
+
+  // Honest dot ratio: the canvas paints POPULATION_DOTS dots for the whole
+  // customer base, so each dot stands for (total customers / dots). Derived
+  // from live state rather than a hardcoded figure so the caption can't drift.
+  const totalCustomers = banks.reduce((sum, b) => sum + (b.customers ?? 0), 0);
+  const customersPerDot = totalCustomers > 0 ? Math.round(totalCustomers / POPULATION_DOTS) : 0;
 
   return (
     <section
@@ -94,7 +100,8 @@ export default function RacePanel({ regime }: Props) {
         )}
       </div>
       <p className="mt-2 pl-1 text-[11px] text-text-muted">
-        1 dot ≈ 3,500 customers · red = victimised · green = protected
+        {customersPerDot > 0 ? `1 dot ≈ ${formatNumber(customersPerDot)} customers · ` : ""}red =
+        victimised · green = protected
       </p>
 
       <div className="hairline my-4" />

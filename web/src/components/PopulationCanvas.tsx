@@ -1,7 +1,11 @@
 "use client";
 import { useEffect, useRef } from "react";
 
-const N = 6000;
+// Number of dots painted per regime panel. Exported so callers can derive an
+// honest "customers per dot" caption from the live customer total instead of
+// inventing a ratio.
+export const POPULATION_DOTS = 6000;
+const N = POPULATION_DOTS;
 const COLS = 100;
 const ROWS = Math.ceil(N / COLS);
 const CANVAS_H = 220;

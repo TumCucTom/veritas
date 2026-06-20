@@ -1,12 +1,7 @@
 "use client";
 import { useState } from "react";
 import { api } from "../lib/api";
-
-interface PredictResult {
-  label: string;
-  confidence: number;
-  indicators: string[];
-}
+import type { PredictResponse } from "../lib/types";
 
 interface ExplainResult {
   explanation: string;
@@ -14,11 +9,14 @@ interface ExplainResult {
   groundedIn?: string;
 }
 
+// The single account both the scorer and the analyst rationale describe. The
+// model scores this exact feature vector (see inspect()), so the indicators and
+// the narration are genuinely about the same transaction.
 const SAMPLE_TXN = { accountAgeDays: 2, fanout: 9, velocity: 1, campaignSignature: 1 };
 
 export default function Inspector() {
   const [loading, setLoading] = useState(false);
-  const [predict, setPredict] = useState<PredictResult | null>(null);
+  const [predict, setPredict] = useState<PredictResponse | null>(null);
   const [explain, setExplain] = useState<ExplainResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,9 +24,11 @@ export default function Inspector() {
     setLoading(true);
     setError(null);
     setExplain(null);
-    let scored: PredictResult | null = null;
+    let scored: PredictResponse | null = null;
     try {
-      scored = (await api.predict({ campaignSignature: 1 })) as PredictResult;
+      // Score the exact account we narrate below, so the displayed indicators
+      // are the model's output for SAMPLE_TXN — not a different stub vector.
+      scored = await api.predict(SAMPLE_TXN);
       setPredict(scored);
     } catch {
       setPredict(null);

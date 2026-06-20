@@ -50,11 +50,24 @@ app.get("/v1/transparency",(_q,r)=>r.json(provenance().map((p,i)=>({
 }))));
 app.post("/predict",(_q,r)=>r.json({label:"fraud",confidence:0.97,
   indicators:["new account","high-velocity fan-out to multiple recipients"]}));
-app.post("/campaign/inject",(_q,r)=>{s.campaign=true; const x=snap(); r.json({ok:true}); sendNode("round_complete",x); sendPlane("round_complete",tenantState());});
+// Emit fraud_propagated {bankId, regime} per the contract so the web listener
+// (useEvents) receives them in mock mode. In the siloed regime the campaign
+// spreads bank to bank; under federation it is contained, so only the first
+// (origin) bank is hit before the network reacts.
+const emitFraudPropagated=()=>{
+  for(const id of BANK_IDS){
+    sendNode("fraud_propagated",{bankId:id,regime:"siloed"});
+  }
+  sendNode("fraud_propagated",{bankId:BANK_IDS[0],regime:"federated"});
+};
+app.post("/campaign/inject",(_q,r)=>{s.campaign=true; const x=snap(); r.json({ok:true}); sendNode("round_complete",x); sendPlane("round_complete",tenantState()); emitFraudPropagated();});
 app.post("/attack/inject",(_q,r)=>{s.attack=true; r.json({ok:true}); sendNode("attack_detected",{bankId:BANK_IDS[0],rejected:true}); sendPlane("attack_detected",{bankId:BANK_IDS[0],rejected:true});});
 app.post("/sim/reset",(_q,r)=>{s={round:0,campaign:false,attack:false}; r.json(snap());});
 app.post("/round/step",(_q,r)=>{s.round++; const x=snap(); r.json(x); sendNode("round_complete",x); sendPlane("round_complete",tenantState());
-  for(const b of x.banks) sendNode("client_updated",{bankId:b.id,detection:b.detection});});
+  for(const b of x.banks) sendNode("client_updated",{bankId:b.id,detection:b.detection});
+  // While a campaign is live, siloed fraud keeps reaching the next bank each
+  // round; federation has already contained the origin, so it does not spread.
+  if(s.campaign){const nextBank=BANK_IDS[Math.min(s.round,BANK_IDS.length-1)]; sendNode("fraud_propagated",{bankId:nextBank,regime:"siloed"});}});
 app.get("/events",(q,r)=>{r.set({"Content-Type":"text/event-stream","Cache-Control":"no-cache",Connection:"keep-alive"});
   r.flushHeaders(); r.write(`event: round_complete\ndata: ${JSON.stringify(snap())}\n\n`);
   nodeClients.add(r); q.on("close",()=>nodeClients.delete(r));});
