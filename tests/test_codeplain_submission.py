@@ -329,6 +329,86 @@ class CodeplainSubmissionTest(unittest.TestCase):
         self.assertNotIn("*.plain", ignore)
         self.assertNotIn("config.yaml", ignore)
 
+    def test_contract_is_single_source_of_truth_for_predict_and_events(self) -> None:
+        """schema.py (canonical) and types.ts (mirror) must declare the same
+        contract surface: the State/Bank/Detection/Counters/Provenance core, the
+        PredictRequest/PredictResponse pair, and the fraud_propagated event."""
+        schema = read(ROOT / "contract" / "schema.py")
+        types = read(ROOT / "contract" / "types.ts")
+
+        # schema.py is documented as the source of truth.
+        self.assertRegex(schema.lower(), r"single source of truth")
+        self.assertRegex(types.lower(), r"source of truth")
+
+        # Core contract types appear in both files.
+        for name in ("Detection", "Bank", "RegimeCounters", "Counters", "Provenance"):
+            self.assertIn(name, schema, msg=f"{name} missing from schema.py")
+            self.assertIn(name, types, msg=f"{name} missing from types.ts")
+
+        # /predict contract is now declared in both single-source files.
+        for name in ("PredictRequest", "PredictResponse"):
+            self.assertIn(name, schema, msg=f"{name} missing from schema.py")
+            self.assertIn(name, types, msg=f"{name} missing from types.ts")
+
+        # PredictResponse must carry label/confidence/indicators in both files
+        # (mirrors the real node /predict endpoint).
+        for field in ("label", "confidence", "indicators"):
+            self.assertIn(field, schema)
+            self.assertIn(field, types)
+
+        # The fraud_propagated event the web subscribes to must be declared.
+        self.assertIn("fraud_propagated", types)
+
+        # Both express the camelCase privacy invariant field.
+        self.assertIn("customerRecordsTransmitted", schema)
+        self.assertIn("customerRecordsTransmitted", types)
+
+    def test_generated_contract_client_holds_conformance_invariants(self) -> None:
+        """If the contract-clients package has been generated, the generated
+        validators/conformance suite must satisfy the basic invariants the spec
+        requires: a real 0..1 confidence check, domain-aliased runtime exports,
+        and no Jasmine .withContext() calls (which throw under Vitest)."""
+        base = ROOT / "codeplain" / "contract-clients"
+        src = base / "build" / "src"
+        validators = src / "validators.ts"
+        types = src / "types.ts"
+        if not validators.is_file() or not types.is_file():
+            self.skipTest("contract-clients build/ not generated in this checkout")
+
+        validators_text = read(validators)
+        types_text = read(types)
+
+        # Real 0..1 confidence validation lives in isPredictResponse.
+        self.assertIn("isPredictResponse", validators_text)
+        self.assertRegex(
+            validators_text,
+            r"confidence\s*>=\s*0",
+            msg="isPredictResponse must reject confidence < 0",
+        )
+        self.assertRegex(
+            validators_text,
+            r"confidence\s*<=\s*1",
+            msg="isPredictResponse must reject confidence > 1",
+        )
+
+        # Domain-specific aliases are exported at runtime (declaration merging).
+        for runtime_export in ("StateSnapshot", "BankSummary", "ProvenanceEntry"):
+            self.assertRegex(
+                types_text,
+                rf"export const {runtime_export}\b",
+                msg=f"{runtime_export} must be a runtime export, not just a type",
+            )
+
+        # No Jasmine .withContext() anywhere in the generated conformance suite.
+        conformance_dir = base / "build_conformance_tests"
+        if conformance_dir.is_dir():
+            for test_file in conformance_dir.rglob("*.test.ts"):
+                self.assertNotIn(
+                    ".withContext",
+                    read(test_file),
+                    msg=f"{test_file} uses Jasmine .withContext (throws under Vitest)",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

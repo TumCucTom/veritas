@@ -6,3 +6,14 @@
 **/dist_conformance_tests/
 **/codeplain.log
 **/*.log
+
+# Generator residue: byte-compiled Python and nested git checkouts the
+# Codeplain build leaves inside generated module/conformance trees.
+**/__pycache__/
+**/*.py[cod]
+**/.git/
+.pytest_cache/
+**/node_modules/
+# `npm i` run by the conformance test command in a dir with no package.json
+# leaves an empty lockfile; keep it out of the tree.
+**/package-lock.json
