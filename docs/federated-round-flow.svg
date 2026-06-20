@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1330" height="820" viewBox="10 0 1330 820" role="img" aria-labelledby="title">
+  <title id="title">federated round flow</title>
+  <defs><marker id="arrow-1d2733" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1d2733" /></marker></defs>
+  <rect x="10" y="0" width="1330" height="820" fill="#ffffff" />
+  <text x="40" y="59.92" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="34" text-anchor="start"><tspan x="40" dy="0">Federated Round Flow</tspan></text>
+  <text x="40" y="89.84" fill="#526170" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="40" dy="0">One model round from global model pull to audited promotion.</tspan></text>
+  <rect x="50" y="140" width="270" height="150" rx="18" fill="#f1ebf7" stroke="#9467bd" stroke-width="2" />
+  <text x="66" y="169.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="66" dy="0">1. Round opens</tspan><tspan x="66" dy="21.6">Control plane publishes current model, DP params, min updates</tspan></text>
+  <rect x="380" y="140" width="270" height="150" rx="18" fill="#e9f7ef" stroke="#2ca02c" stroke-width="2" />
+  <text x="396" y="169.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="396" dy="0">2. Bank node pulls model</tspan><tspan x="396" dy="21.6">JWT-authenticated member request</tspan></text>
+  <rect x="710" y="140" width="270" height="150" rx="18" fill="#e9f7ef" stroke="#2ca02c" stroke-width="2" />
+  <text x="726" y="169.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="726" dy="0">3. Local train</tspan><tspan x="726" dy="21.6">Connector data -&gt; logistic / GraphSAGE GNN</tspan><tspan x="726" dy="21.6">Raw bank records stay local</tspan></text>
+  <rect x="1040" y="140" width="270" height="150" rx="18" fill="#fff7d7" stroke="#b8860b" stroke-width="2" />
+  <text x="1056" y="169.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="1056" dy="0">4. Privacy + proof</tspan><tspan x="1056" dy="21.6">Clip update, add Gaussian noise</tspan><tspan x="1056" dy="21.6">Attach VSA bounded-norm proof</tspan></text>
+  <rect x="50" y="400" width="270" height="150" rx="18" fill="#e9f7ef" stroke="#2ca02c" stroke-width="2" />
+  <text x="66" y="429.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="66" dy="0">5. Submit update</tspan><tspan x="66" dy="21.6">model delta + metrics + attestation</tspan><tspan x="66" dy="21.6">No raw features or labels</tspan></text>
+  <rect x="380" y="400" width="270" height="150" rx="18" fill="#f1ebf7" stroke="#9467bd" stroke-width="2" />
+  <text x="396" y="429.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="396" dy="0">6. Verify + aggregate</tspan><tspan x="396" dy="21.6">JWT, member status, proof, attestation</tspan><tspan x="396" dy="21.6">Multi-Krum rejects outliers</tspan></text>
+  <rect x="710" y="400" width="270" height="150" rx="18" fill="#f1ebf7" stroke="#9467bd" stroke-width="2" />
+  <text x="726" y="429.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="726" dy="0">7. Registry + log</tspan><tspan x="726" dy="21.6">New model version</tspan><tspan x="726" dy="21.6">Signed Merkle transparency record</tspan></text>
+  <rect x="1040" y="400" width="270" height="150" rx="18" fill="#e8f2fb" stroke="#1f77b4" stroke-width="2" />
+  <text x="1056" y="429.84" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="1056" dy="0">8. Broadcast</tspan><tspan x="1056" dy="21.6">Nodes pull global model</tspan><tspan x="1056" dy="21.6">Edge model syncs down to devices</tspan></text>
+  <polyline points="320,215 380,215" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="650,215 710,215" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="980,215 1040,215" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="1130,290 1130,400" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="1040,475 980,475" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="710,475 650,475" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="380,475 320,475" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <rect x="50" y="680" width="620" height="110" rx="18" fill="#fdeaea" stroke="#d62728" stroke-width="2" />
+  <text x="66" y="711.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="66" dy="0">Failure path</tspan><tspan x="66" dy="24">Forged or high-norm update -&gt; VSA proof fails</tspan><tspan x="66" dy="24">Byzantine update -&gt; Multi-Krum rejects</tspan><tspan x="66" dy="24">Rejected member appears in provenance and console</tspan></text>
+  <rect x="720" y="680" width="560" height="110" rx="18" fill="#fff7d7" stroke="#b8860b" stroke-width="2" />
+  <text x="736" y="711.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="736" dy="0">Audit path</tspan><tspan x="736" dy="24">contributors + rejected + model hash + metrics + attestation quotes</tspan><tspan x="736" dy="24">leaf hash -&gt; Merkle root -&gt; signed root</tspan></text>
+</svg>
