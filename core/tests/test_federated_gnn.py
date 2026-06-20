@@ -20,3 +20,12 @@ def test_deterministic():
     b = run(seed=3, verbose=False)
     assert a["federated_recall"] == b["federated_recall"]
     assert a["siloed_recall"] == b["siloed_recall"]
+
+
+def test_default_benchmark_matches_demo_fixture_band():
+    res = run(n_banks=4, n_accounts=700, n_campaigns=8, rounds=25,
+              local_epochs=12, lr=0.15, seed=0, verbose=False)
+
+    assert 0.49 <= res["siloed_recall"] <= 0.54
+    assert res["federated_recall"] >= 0.79
+    assert res["federated_auc"] >= 0.92

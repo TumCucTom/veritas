@@ -1,3 +1,5 @@
+import { gnnBenchmark } from "./gnnBenchmark.js";
+
 const BANKS=[["bank0","Barclays",2100000],["bank1","NatWest",1900000],
 ["bank2","Lloyds",1750000],["bank3","HSBC",1600000],["bank4","Santander",1400000],
 ["bank5","Monzo",900000],["bank6","Starling",700000],["bank7","Nationwide",1500000]];
@@ -16,6 +18,7 @@ export function snapshot(round,campaign,attack){
   const AR=9000,AVG=255,fv=Math.round(AR*(1-fd)),sv=Math.round(AR*(1-sd));
   return {round,running:true,banks,campaignActive:campaign,attackActive:attack,
     customerRecordsTransmitted:0,
+    gnnBenchmark:gnnBenchmark(round,campaign),
     counters:{federated:{fraudPreventedGbp:(sv-fv)*AVG,timeToDetectHours:3,victims:fv,lostGbp:fv*AVG},
               siloed:{fraudPreventedGbp:0,timeToDetectHours:101,victims:sv,lostGbp:sv*AVG}}};
 }

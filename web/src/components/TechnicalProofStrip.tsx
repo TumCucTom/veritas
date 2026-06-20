@@ -1,12 +1,13 @@
 "use client";
 import { meanDetection } from "../lib/derive";
+import { summarizeGnnBenchmark } from "../lib/gnnTelemetry";
 import { useVeritas } from "../lib/store";
 
 const STEPS = [
-  "local train",
-  "DP clip/noise",
+  "GraphSAGE local train",
+  "DP GNN delta",
   "Multi-Krum aggregate",
-  "provenance recorded",
+  "VSA proof",
 ] as const;
 
 export default function TechnicalProofStrip() {
@@ -17,6 +18,7 @@ export default function TechnicalProofStrip() {
   const silo = Math.round(meanDetection(banks, "siloed") * 100);
   const records = state?.customerRecordsTransmitted ?? 0;
   const attackRejected = Boolean(lastAttack?.rejected || state?.attackActive);
+  const gnnSummary = summarizeGnnBenchmark(state?.gnnBenchmark);
 
   return (
     <section
@@ -31,15 +33,22 @@ export default function TechnicalProofStrip() {
               key={step}
               label={step}
               active={round > 0 || index === 0}
-              flagged={step === "Multi-Krum aggregate" && attackRejected}
+              flagged={(step === "Multi-Krum aggregate" || step === "VSA proof") && attackRejected}
             />
           ))}
         </div>
+        <p className="mt-3 text-[12px] leading-relaxed text-text-secondary">
+          {gnnSummary.proofLabel}
+        </p>
       </div>
       <div className="grid grid-cols-3 gap-px bg-border-default text-center md:min-w-[420px]">
         <ProofMetric label="round" value={String(round).padStart(2, "0")} />
         <ProofMetric label="records moved" value={String(records)} accent="var(--fed)" />
-        <ProofMetric label="detect gap" value={`${fed}% / ${silo}%`} accent="var(--accent-gold)" />
+        <ProofMetric
+          label="GNN lift"
+          value={gnnSummary.available ? gnnSummary.currentRecallLiftLabel : `${fed - silo} pts`}
+          accent="var(--accent-gold)"
+        />
       </div>
     </section>
   );

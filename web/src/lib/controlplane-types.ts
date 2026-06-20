@@ -36,6 +36,7 @@ export interface TenantState {
    * panel falls back to a clearly-labelled representative view.
    */
   edgeFleet?: EdgeFleet;
+  gnnBenchmark?: import("./types").GnnBenchmark;
 }
 
 /** Tier-0 edge fleet coverage (optional on tenant state). */

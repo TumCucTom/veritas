@@ -76,4 +76,26 @@ describe("computeContagionFrame", () => {
     expect(federated.totals.exposed).toBeLessThan(siloed.totals.exposed);
     expect(federated.frontier.protectionRadius).toBeGreaterThan(federated.frontier.fraudRadius);
   });
+
+  it("can use federated GNN recall as the containment signal", () => {
+    const genericDetection = computeContagionFrame({
+      regime: "federated",
+      round: 5,
+      campaignActive: true,
+      detection: 0.36,
+    });
+    const gnnBacked = computeContagionFrame({
+      regime: "federated",
+      round: 5,
+      campaignActive: true,
+      detection: 0.36,
+      gnnRecall: 0.8068455452356381,
+    });
+
+    expect(gnnBacked.totals.exposed).toBeLessThan(genericDetection.totals.exposed);
+    expect(gnnBacked.totals.protected).toBeGreaterThan(genericDetection.totals.protected);
+    expect(gnnBacked.frontier.protectionRadius).toBeGreaterThan(
+      genericDetection.frontier.protectionRadius,
+    );
+  });
 });

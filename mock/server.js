@@ -13,6 +13,7 @@ const tenantState=()=>{
   const x=snap(),fed=x.counters.federated,silo=x.counters.siloed;
   return {
     round:x.round,modelVersion:Math.max(1,x.round),customerRecordsTransmitted:0,
+    gnnBenchmark:x.gnnBenchmark,
     node:{status:"synced",lastSync:new Date().toISOString(),attestation:"verified"},
     lift:{
       federated:{recall:x.banks.reduce((a,b)=>a+b.detection.federated,0)/x.banks.length,

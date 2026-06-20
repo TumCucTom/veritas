@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { meanDetection } from "../lib/derive";
 import { formatNumber } from "../lib/format";
+import { summarizeGnnBenchmark } from "../lib/gnnTelemetry";
 import { useVeritas } from "../lib/store";
 import {
   LOGICAL_CUSTOMERS,
@@ -35,9 +36,14 @@ export default function MassiveContagionStage() {
   const banks = state?.banks ?? [];
   const round = state?.round ?? 0;
   const campaignActive = state?.campaignActive ?? false;
+  const gnnSummary = summarizeGnnBenchmark(state?.gnnBenchmark);
 
-  const siloDetection = meanDetection(banks, "siloed");
-  const fedDetection = meanDetection(banks, "federated");
+  const siloDetection = gnnSummary.available
+    ? gnnSummary.siloedRecall
+    : meanDetection(banks, "siloed");
+  const fedDetection = gnnSummary.available
+    ? gnnSummary.currentFederatedRecall
+    : meanDetection(banks, "federated");
 
   const siloed = useMemo(
     () =>
@@ -46,8 +52,9 @@ export default function MassiveContagionStage() {
         round,
         campaignActive,
         detection: siloDetection,
+        gnnRecall: gnnSummary.available ? gnnSummary.siloedRecall : undefined,
       }),
-    [campaignActive, round, siloDetection],
+    [campaignActive, gnnSummary.available, gnnSummary.siloedRecall, round, siloDetection],
   );
   const federated = useMemo(
     () =>
@@ -56,8 +63,9 @@ export default function MassiveContagionStage() {
         round,
         campaignActive,
         detection: fedDetection,
+        gnnRecall: gnnSummary.available ? gnnSummary.currentFederatedRecall : undefined,
       }),
-    [campaignActive, fedDetection, round],
+    [campaignActive, fedDetection, gnnSummary.available, gnnSummary.currentFederatedRecall, round],
   );
 
   return (
@@ -70,40 +78,43 @@ export default function MassiveContagionStage() {
         style={{ borderColor: "var(--border-default)" }}
       >
         <div>
-          <p className="eyebrow text-accent-gold">Million-customer contagion model</p>
+          <p className="eyebrow text-accent-gold">Federated GNN mule-graph benchmark</p>
           <h2
             id="contagion-stage-heading"
             className="mt-2 font-display text-[clamp(1.7rem,1.2rem+2vw,3rem)] leading-tight tracking-tight text-text-primary"
           >
-            Fraud spreads through the network. Veritas spreads faster.
+            Cross-bank mule rings are a graph problem. Veritas trains the graph without moving records.
           </h2>
           <p className="mt-3 max-w-3xl text-[13px] leading-relaxed text-text-secondary sm:text-[14px]">
-            A deterministic SIR-style graph simulation over {formatNumber(LOGICAL_CUSTOMERS)}{" "}
-            simulated customers, rendered from {formatNumber(VISIBLE_POINTS)} sampled points
-            (1 dot ≈ {Math.round(LOGICAL_CUSTOMERS / VISIBLE_POINTS)} customers). Bank clusters are
-            local communities; bright corridors are sampled mule-payment paths between institutions.
+            Headline metrics come from <span className="text-text-primary">{gnnSummary.sourceLabel}</span>.
+            The benchmark graph has <span className="text-text-primary">{gnnSummary.graphLabel}</span>;
+            this canvas visualizes that cross-bank signal over {formatNumber(LOGICAL_CUSTOMERS)} simulated
+            customers, rendered from {formatNumber(VISIBLE_POINTS)} sampled points (1 dot ≈{" "}
+            {Math.round(LOGICAL_CUSTOMERS / VISIBLE_POINTS)} customers).
           </p>
         </div>
         <div
-          className="grid grid-cols-2 gap-px overflow-hidden rounded-[14px] border text-center sm:min-w-[360px]"
+          className="grid grid-cols-2 gap-px overflow-hidden rounded-[14px] border text-center sm:min-w-[520px] lg:grid-cols-4"
           style={{ borderColor: "var(--border-default)", background: "var(--border-default)" }}
         >
-          <Metric label="Siloed exposed" value={siloed.totals.exposed} tone="silo" />
-          <Metric label="Suppressed by Veritas" value={federated.totals.suppressed} tone="fed" />
+          <Metric label="Siloed recall" value={gnnSummary.siloedRecallLabel} tone="silo" />
+          <Metric label="Fed GNN recall" value={gnnSummary.federatedRecallLabel} tone="fed" />
+          <Metric label="Recall lift" value={gnnSummary.recallLiftLabel} tone="fed" />
+          <Metric label="AUC lift" value={gnnSummary.aucLiftLabel} tone="gold" />
         </div>
       </header>
 
       <div className="grid gap-px bg-border-default lg:grid-cols-2">
         <ContagionPanel
           title="Siloed"
-          label="Fraud storm"
+          label="Local GNN blind spot"
           regime="siloed"
           frame={siloed}
           round={round}
         />
         <ContagionPanel
           title="Veritas"
-          label="Immunity wave"
+          label="Federated GNN containment"
           regime="federated"
           frame={federated}
           round={round}
@@ -113,14 +124,23 @@ export default function MassiveContagionStage() {
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: number; tone: "fed" | "silo" }) {
+function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "fed" | "silo" | "gold";
+}) {
+  const color = tone === "fed" ? "var(--fed)" : tone === "silo" ? "var(--silo)" : "var(--accent-gold)";
   return (
     <div className="bg-bg-surface-2 px-4 py-3">
-      <p className="eyebrow" style={{ color: tone === "fed" ? "var(--fed)" : "var(--silo)" }}>
+      <p className="eyebrow" style={{ color }}>
         {label}
       </p>
       <p className="tabular mt-1 font-display text-2xl leading-none text-text-primary">
-        {formatNumber(value)}
+        {value}
       </p>
     </div>
   );
@@ -159,9 +179,9 @@ function ContagionPanel({
       <ContagionCanvas frame={frame} regime={regime} round={round} />
 
       <dl className="mt-3 grid grid-cols-3 gap-3">
-        <SmallStat label="exposed" value={frame.totals.exposed} tone="silo" />
-        <SmallStat label="protected" value={frame.totals.protected} tone="fed" />
-        <SmallStat label="mule links" value={frame.totals.crossBankLinks} tone="gold" />
+        <SmallStat label="visual exposure" value={frame.totals.exposed} tone="silo" />
+        <SmallStat label="visual containment" value={frame.totals.protected} tone="fed" />
+        <SmallStat label="mule corridors" value={frame.totals.crossBankLinks} tone="gold" />
       </dl>
     </article>
   );

@@ -10,6 +10,7 @@ export interface ContagionInput {
   round: number;
   campaignActive: boolean;
   detection: number;
+  gnnRecall?: number;
 }
 
 export interface ContagionPoint {
@@ -109,7 +110,7 @@ function frontiers(input: ContagionInput): ContagionFrame["frontier"] {
   if (!input.campaignActive) return { fraudRadius: 0, protectionRadius: 0 };
 
   const round = Math.max(0, input.round);
-  const detection = clamp01(input.detection);
+  const detection = clamp01(input.gnnRecall ?? input.detection);
   const fraudBase = input.regime === "siloed" ? 0.18 : 0.12;
   const fraudSpeed = input.regime === "siloed" ? 0.115 : 0.075;
   const fraudResistance = input.regime === "federated" ? detection * 0.32 : detection * 0.1;

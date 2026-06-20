@@ -19,6 +19,39 @@ export interface Counters {
   federated: RegimeCounters;
   siloed: RegimeCounters;
 }
+export interface GnnBenchmark {
+  source: {
+    path: string;
+    seed: number;
+    generatedAt: string;
+  };
+  graph: {
+    banks: number;
+    accounts: number;
+    campaigns: number;
+    crossBankEdges: number;
+    alertBudgetPct: number;
+  };
+  training: {
+    rounds: number;
+    aggregation: string;
+    privacy: string;
+    verification: string;
+  };
+  metrics: {
+    siloedRecall: number;
+    federatedRecall: number;
+    siloedAuc: number;
+    federatedAuc: number;
+  };
+  current?: {
+    round: number;
+    progress: number;
+    siloedRecall: number;
+    federatedRecall: number;
+    recallLift: number;
+  };
+}
 export interface State {
   round: number;
   running: boolean;
@@ -27,6 +60,7 @@ export interface State {
   campaignActive: boolean;
   attackActive: boolean;
   customerRecordsTransmitted: number;
+  gnnBenchmark?: GnnBenchmark;
 }
 export interface Provenance {
   round: number;
