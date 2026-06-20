@@ -3,6 +3,7 @@
  * production, or to a fake in tests / the demo (no live node required).
  */
 import type { Vector } from "./model.js";
+import type { CohortAssignment } from "./secureAgg.js";
 
 /** GET /edge/v1/model response (per PROTOCOL.md). */
 export interface EdgeModelResponse {
@@ -10,6 +11,22 @@ export interface EdgeModelResponse {
   dim: number;
   weights: Vector;
 }
+
+/** POST /edge/v1/cohort request: a device asks the node to assign it to a
+ * secure-aggregation cohort for the current round. The node (relay/dealer in
+ * this reference; X25519 DH key-agreement coordinator in production) returns the
+ * device's client id, its peers, and the per-pair shared seeds it needs to mask.
+ */
+export interface CohortOpenRequest {
+  /** Ephemeral enrolment token — NOT a customer identifier. */
+  deviceToken: string;
+  /** Optional explicit round/cohort id; the node may choose one otherwise. */
+  cohortId?: string;
+}
+
+/** GET/POST /edge/v1/cohort response: the device's cohort assignment. This is
+ * exactly the {@link CohortAssignment} the secure-agg masking needs. */
+export type CohortOpenResponse = CohortAssignment;
 
 /** POST /edge/v1/updates request body (per PROTOCOL.md).
  *
@@ -41,6 +58,14 @@ export interface EdgeUpdateResponse {
 export interface Transport {
   getModel(): Promise<EdgeModelResponse>;
   postUpdate(body: EdgeUpdateRequest): Promise<EdgeUpdateResponse>;
+  /**
+   * Open (or join) a secure-aggregation cohort for this round. Returns the
+   * device's {@link CohortAssignment} (client id, peers, per-pair seeds) so the
+   * device can pairwise-mask its update. Optional so legacy DP-only transports
+   * still satisfy the interface; when absent, secure aggregation is unavailable
+   * and the SDK falls back to the DP-only posture.
+   */
+  openCohort?(body: CohortOpenRequest): Promise<CohortOpenResponse>;
 }
 
 export interface FetchTransportOpts {
@@ -96,5 +121,20 @@ export class FetchTransport implements Transport {
       throw new Error(`POST /edge/v1/updates failed: ${res.status}`);
     }
     return (await res.json()) as EdgeUpdateResponse;
+  }
+
+  /** POST /edge/v1/cohort — request a secure-aggregation cohort assignment so
+   * the device can pairwise-mask its update. This is what makes secure
+   * aggregation reachable through the production transport. */
+  async openCohort(body: CohortOpenRequest): Promise<CohortOpenResponse> {
+    const res = await this.doFetch(`${this.base}/edge/v1/cohort`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`POST /edge/v1/cohort failed: ${res.status}`);
+    }
+    return (await res.json()) as CohortOpenResponse;
   }
 }

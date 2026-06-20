@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clipUpdate, addNoise, privatize, l2norm, Rng } from "../src/index.js";
-
+import { clipUpdate, addNoise, privatize, l2norm, Rng, SecureRng } from "../src/index.js";
 describe("differential privacy", () => {
   it("clip bounds the L2 norm to maxNorm", () => {
     const big = [10, -10, 10, -10, 10, 5, 5, 5, 5, 5, 5];
@@ -33,5 +32,15 @@ describe("differential privacy", () => {
     expect(out.every((v) => Number.isFinite(v))).toBe(true);
     // with small sigma the privatized norm stays in a sane neighbourhood of maxNorm
     expect(l2norm(out)).toBeLessThan(3.0 * 4);
+  });
+
+  it("SecureRng (CSPRNG) draws non-deterministic noise — SPEC-DP", () => {
+    // No fixed seed: two SecureRng instances must not produce the same stream.
+    const u = new Array(64).fill(0);
+    const a = addNoise(u, 0.5, 3.0, new SecureRng());
+    const b = addNoise(u, 0.5, 3.0, new SecureRng());
+    const identical = a.every((x, i) => x === b[i]);
+    expect(identical).toBe(false);
+    expect(a.every((x) => Number.isFinite(x))).toBe(true);
   });
 });

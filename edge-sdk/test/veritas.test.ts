@@ -112,7 +112,8 @@ describe("contributeUpdate", () => {
 describe("secure aggregation (masked cohort contribution)", () => {
   // Two-device cohort sharing one pairwise seed; the node is the dealer/relay.
   function cohort(): { a: CohortAssignment; b: CohortAssignment } {
-    const seed = 0x1234abcd;
+    // 32-byte seed as 64-char hex (the canonical wire form).
+    const seed = "1234abcd".repeat(8);
     const seeds = { [pairKey("devA", "devB")]: seed };
     return {
       a: { cohortId: "c1", clientId: "devA", peerIds: ["devB"], seeds },
@@ -144,6 +145,31 @@ describe("secure aggregation (masked cohort contribution)", () => {
     const maskedNorm = Math.sqrt(sent.update.reduce((s, x) => s + x * x, 0));
     const dpNorm = Math.sqrt(dpUpdate.reduce((s, x) => s + x * x, 0));
     expect(maskedNorm).toBeGreaterThan(dpNorm * 100);
+    // still no raw events / PII on the wire
+    expect(JSON.stringify(sent)).not.toMatch(/payeeId|amount|observedAt|events/i);
+  });
+
+  it("opens a cohort through the transport so secure-agg is reachable in production", async () => {
+    // No hand-built CohortAssignment: the SDK asks the node transport to open a
+    // cohort (openCohort), then masks against the assignment it returns.
+    const node = new FakeNode();
+    const v = Veritas.start({ transport: node, seed: 7, seedEvents: 400 });
+    v.observePayment(FRAUD);
+
+    const result = await v.contributeUpdate({ useCohort: true });
+    expect(result.sent).toBe(true);
+
+    // The device actually hit the cohort-open endpoint.
+    expect(node.cohortRequests.length).toBe(1);
+    expect(typeof node.cohortRequests[0]!.deviceToken).toBe("string");
+
+    // The posted update carries the cohort id + client id and is masked (huge
+    // norm vs an O(1) DP update) — secure aggregation went over the transport.
+    const sent = node.received[0]!;
+    expect(sent.cohortId).toBe("round-1");
+    expect(sent.clientId).toBe("devA");
+    const maskedNorm = Math.sqrt(sent.update.reduce((s, x) => s + x * x, 0));
+    expect(maskedNorm).toBeGreaterThan(1000);
     // still no raw events / PII on the wire
     expect(JSON.stringify(sent)).not.toMatch(/payeeId|amount|observedAt|events/i);
   });

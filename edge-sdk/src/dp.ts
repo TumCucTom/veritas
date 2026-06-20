@@ -11,7 +11,7 @@
  */
 import type { Vector } from "./model.js";
 import { l2norm } from "./model.js";
-import { Rng } from "./rng.js";
+import type { RandomSource } from "./rng.js";
 
 /** Clip an update to a maximum L2 norm (no-op if already inside the ball). */
 export function clipUpdate(u: Vector, maxNorm: number): Vector {
@@ -26,18 +26,22 @@ export function addNoise(
   u: Vector,
   sigma: number,
   maxNorm: number,
-  rng: Rng,
+  rng: RandomSource,
 ): Vector {
   const std = sigma * maxNorm;
   return u.map((v) => v + rng.normal(0, std));
 }
 
-/** privatize(u) = add_noise(clip_update(u)). */
+/** privatize(u) = add_noise(clip_update(u)).
+ *
+ * ``rng`` is the privacy-NOISE source — pass a {@link SecureRng} in production
+ * (CSPRNG) and a seeded {@link Rng} only in tests (SPEC-DP). It must be distinct
+ * from any synthetic-data generator. */
 export function privatize(
   u: Vector,
   maxNorm: number,
   sigma: number,
-  rng: Rng,
+  rng: RandomSource,
 ): Vector {
   return addNoise(clipUpdate(u, maxNorm), sigma, maxNorm, rng);
 }

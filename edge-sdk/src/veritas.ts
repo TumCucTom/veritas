@@ -39,7 +39,8 @@ import type {
 } from "./transport.js";
 import { maskUpdate } from "./secureAgg.js";
 import type { CohortAssignment } from "./secureAgg.js";
-import { Rng } from "./rng.js";
+import { Rng, SecureRng } from "./rng.js";
+import type { RandomSource } from "./rng.js";
 
 export interface VeritasConfig {
   /** Base URL of the bank's Veritas Node (Tier 1). */
@@ -77,13 +78,20 @@ export class Veritas {
   private readonly buffer: EventBuffer;
   private readonly transport?: Transport;
   private readonly dp: DpParams;
-  private readonly rng: Rng;
+  /** Privacy-NOISE source (SPEC-DP). Secure CSPRNG by default; a seeded,
+   * deterministic Rng ONLY when the caller passed an explicit `seed` (tests).
+   * Kept SEPARATE from the synthetic-data generator. */
+  private readonly noiseRng: RandomSource;
   private readonly deviceToken: string;
 
   private constructor(cfg: VeritasConfig) {
     this.weights = initWeights(FEATURE_DIM); // dim = FEATURE_DIM + 1
     this.dp = cfg.dp ?? DEFAULT_DP;
-    this.rng = new Rng(cfg.seed ?? 1234);
+    // SPEC-DP: deterministic noise ONLY behind an explicit test seed. With no
+    // seed, draw privacy noise from a cryptographically secure RNG. The seeded
+    // noise stream is offset from the data seed so the two generators differ.
+    this.noiseRng =
+      cfg.seed !== undefined ? new Rng((cfg.seed ^ 0x5eed0015) >>> 0) : new SecureRng();
     this.deviceToken = cfg.deviceToken ?? `dev-${(cfg.seed ?? 1234).toString(36)}`;
     this.buffer = new EventBuffer();
 
@@ -195,11 +203,37 @@ export class Veritas {
    * posture, still privacy-preserving via DP but visible per-device).
    */
   async contributeUpdate(
-    opts: { epochs?: number; cohort?: CohortAssignment } = {},
+    opts: {
+      epochs?: number;
+      cohort?: CohortAssignment;
+      /** Fetch a secure-aggregation cohort from the node transport before
+       * contributing (requires a transport implementing `openCohort`). Ignored
+       * when an explicit `cohort` is supplied. */
+      useCohort?: boolean;
+      /** Optional cohort/round id to request when `useCohort` is set. */
+      cohortId?: string;
+    } = {},
   ): Promise<ContributeResult> {
     if (!this.transport) {
       throw new Error("No transport configured: pass nodeUrl or transport.");
     }
+
+    // Resolve the cohort: explicit assignment wins; otherwise, if requested,
+    // open one through the real transport so secure aggregation is reachable in
+    // production (not only via a hand-built CohortAssignment).
+    let cohort = opts.cohort;
+    if (!cohort && opts.useCohort) {
+      if (!this.transport.openCohort) {
+        throw new Error(
+          "Transport does not support openCohort; cannot open a secure-agg cohort.",
+        );
+      }
+      cohort = await this.transport.openCohort({
+        deviceToken: this.deviceToken,
+        cohortId: opts.cohortId,
+      });
+    }
+
     const base = this.weights.slice();
     const { X, y } = toTrainingSet(this.buffer.all());
     if (y.length === 0) {
@@ -211,21 +245,21 @@ export class Veritas {
 
     const rawDelta = subtract(trained, base);
     // DP happens CLIENT-SIDE: clip + Gaussian noise the delta.
-    const dpUpdate = privatize(rawDelta, this.dp.maxNorm, this.dp.sigma, this.rng);
+    const dpUpdate = privatize(rawDelta, this.dp.maxNorm, this.dp.sigma, this.noiseRng);
 
     // Secure aggregation: mask the DP update so the node never sees it in clear.
-    const body: EdgeUpdateRequest = opts.cohort
+    const body: EdgeUpdateRequest = cohort
       ? {
           deviceToken: this.deviceToken,
           update: maskUpdate(
             dpUpdate,
-            opts.cohort.clientId,
-            opts.cohort.peerIds,
-            opts.cohort.seeds,
+            cohort.clientId,
+            cohort.peerIds,
+            cohort.seeds,
           ),
           numExamples: y.length,
-          cohortId: opts.cohort.cohortId,
-          clientId: opts.cohort.clientId,
+          cohortId: cohort.cohortId,
+          clientId: cohort.clientId,
         }
       : {
           deviceToken: this.deviceToken,

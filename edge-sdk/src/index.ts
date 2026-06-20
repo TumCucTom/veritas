@@ -32,12 +32,19 @@ export type {
   EdgeUpdateRequest,
   EdgeUpdateResponse,
   FetchTransportOpts,
+  CohortOpenRequest,
+  CohortOpenResponse,
 } from "./transport.js";
-export { Rng } from "./rng.js";
+export { Rng, SecureRng } from "./rng.js";
+export type { RandomSource } from "./rng.js";
 export {
   maskUpdate,
   derivePairwiseMask,
+  prgFloats,
   pairKey,
+  seedToHex,
+  hexToSeed,
   MASK_SCALE,
+  SEED_BYTES,
 } from "./secureAgg.js";
 export type { SeedTable, CohortAssignment } from "./secureAgg.js";
