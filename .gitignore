@@ -30,6 +30,7 @@ models/
 
 # Test / tooling artifacts
 .playwright-mcp/
+.worktrees/
 
 # OS / editor
 .DS_Store
