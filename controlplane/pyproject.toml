@@ -11,10 +11,22 @@ dependencies = [
     "cryptography>=42.0",
     "pyjwt[crypto]>=2.8",
     "numpy>=2.1",
+    # The control plane REUSES the federated-learning primitives (robust
+    # aggregation, DP accounting, the model) from veritas-core — it is a hard
+    # runtime dependency, declared here so the package is independently
+    # installable (resolved from the monorepo via [tool.uv.sources] below, or
+    # `pip install -e ../core`).
+    "veritas-core",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2", "httpx>=0.27"]
+
+# Resolve the local monorepo dependency on veritas-core from the sibling
+# checkout when installing with uv (`uv pip install -e .`). With plain pip,
+# install core editable first: `pip install -e ../core`.
+[tool.uv.sources]
+veritas-core = { path = "../core", editable = true }
 
 [tool.setuptools.packages.find]
 include = ["controlplane*"]

@@ -1,6 +1,13 @@
 """Shared pytest fixtures: a fresh control plane + TestClient per test."""
 from __future__ import annotations
 
+import os
+
+# The app module fails fast at import if the admin key is the insecure default
+# and dev mode is off. Tests run in dev mode (they swap in their own plane with
+# a test admin key via the fixtures below).
+os.environ.setdefault("VERITAS_DEV", "1")
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient

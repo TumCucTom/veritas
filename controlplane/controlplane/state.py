@@ -37,6 +37,29 @@ from .transparency import TransparencyLog
 DIM = live_ensemble.weight_dim()  # packed [logistic|mlp|embeddings|meta] -> 617
 DEFAULT_MIN_UPDATES = 3
 
+# Named feature contract (mirrors the core FEATURE_DIM contract + the node's
+# FEATURE_ORDER). /predict builds the scored vector from the REAL transaction and
+# derives indicators from the actual per-feature contributions to the score.
+FEATURE_ORDER = [
+    "amount", "oldOrig", "newOrig", "oldDest", "newDest",
+    "accountAge", "velocity", "fanout", "isTransfer", "campaignSig",
+]
+assert len(FEATURE_ORDER) == FEATURE_DIM, "FEATURE_ORDER must match FEATURE_DIM"
+# Human-readable fraud indicator per feature, surfaced when that feature pushes
+# the score TOWARD fraud (i.e. its signed contribution x[i]*w[i] is positive).
+FEATURE_INDICATORS = {
+    "amount": "anomalous transfer amount",
+    "accountAge": "new account",
+    "velocity": "high transaction velocity",
+    "fanout": "fan-out to multiple recipients",
+    "isTransfer": "transfer-type movement",
+    "campaignSig": "matches active campaign signature",
+    "oldOrig": "originator balance anomaly",
+    "newOrig": "originator balance drained",
+    "oldDest": "recipient balance anomaly",
+    "newDest": "recipient balance spike",
+}
+
 # Legacy single-backend demo counter model — REPLICATED from
 # core/veritas_core/engine.py so the control plane serves the exact shape the
 # web's useVeritas store consumes, but driven by REAL member-reported metrics.
@@ -202,8 +225,11 @@ class ControlPlane:
         self.dp_spent_epsilon = 0.0
         self._dp_rounds_spent = 0
 
-        # SSE subscriber queues (asyncio.Queue) keyed by id.
+        # SSE subscriber queues (asyncio.Queue) keyed by id. The running event
+        # loop is captured at server startup so worker-thread publishes are
+        # marshalled back onto it thread-safely (see set_event_loop / _publish).
         self._subscribers: list = []
+        self._event_loop = None
 
         # Legacy single-backend demo state. campaign/attack flags drive the
         # banks[] poisoned markers + counters; epoch bumps on /sim/reset so nodes
@@ -394,6 +420,15 @@ class ControlPlane:
     def current_model(self) -> Model:
         return self.models[self.promoted_version]
 
+    def expected_update_dim(self) -> int:
+        """Expected length of a member update vector, derived from the CURRENT
+        global model rather than a hardcoded constant. Updates are deltas applied
+        to the promoted model, so they MUST match its weight-vector length. This
+        keeps the plane dimension-agnostic: swap in a longer live-ensemble model
+        and the accepted update dimension follows automatically (no magic-number
+        change on the wire)."""
+        return len(self.current_model().weights)
+
     def submit_update(self, member_id: str, round_: int, update: list[float],
                       num_examples: int, local_metrics: dict,
                       attestation_quote: str | None = None) -> dict:
@@ -403,8 +438,21 @@ class ControlPlane:
                                  f"({self.current_round})")
             if self.round_status != "open":
                 raise ValueError("round is not open for updates")
-            if len(update) != DIM:
-                raise ValueError(f"update must have dim {DIM}, got {len(update)}")
+            # Dimension-agnostic: the expected weight dimension is whatever the
+            # CURRENT global model carries (genesis -> FEATURE_DIM+1, but a live
+            # ensemble model can be any length). Never hardcode a magic number —
+            # derive it so nodes can send live-ensemble-dim updates without any
+            # plane-side change.
+            expected_dim = self.expected_update_dim()
+            if len(update) != expected_dim:
+                raise ValueError(
+                    f"update must have dim {expected_dim} (current global model "
+                    f"length), got {len(update)}")
+            # Reject non-finite values (NaN / +-inf): a single poisoned NaN would
+            # otherwise propagate through aggregation and corrupt the model.
+            arr = np.asarray(update, dtype=float)
+            if not np.all(np.isfinite(arr)):
+                raise ValueError("update contains non-finite values (NaN/inf)")
             self._receipt_counter += 1
             receipt_id = f"r{round_}-{member_id}-{self._receipt_counter}"
             metrics = dict(local_metrics or {})
@@ -482,6 +530,31 @@ class ControlPlane:
         return selected, sorted(confirmed), scores
 
     def _aggregate_round(self, r: int) -> RoundResult:
+        """Aggregate round `r`, restoring an OPEN round on any failure.
+
+        The aggregation transition (`open -> aggregating -> open`) must be crash-
+        safe: if any step inside raises (a malformed update slipping past
+        validation, a core-aggregator error, a persistence failure), the round
+        would otherwise wedge on `aggregating` forever and reject every further
+        update — a denial of service. We wrap the work so that on ANY exception
+        we log it and restore `round_status = "open"` (the round is NOT advanced,
+        so the same updates can be retried) before re-raising. On success the
+        normal path advances to the next open round.
+        """
+        try:
+            return self._aggregate_round_impl(r)
+        except Exception as exc:  # noqa: BLE001 - never wedge on "aggregating"
+            # Restore the round to OPEN so the federation isn't stuck. Keep the
+            # same round number + accumulated updates so a retry is possible.
+            if self.round_status == "aggregating" and self.current_round == r:
+                self.round_status = "open"
+            import logging
+            logging.getLogger(__name__).exception(
+                "round %s aggregation failed; restored status to 'open': %s",
+                r, exc)
+            raise
+
+    def _aggregate_round_impl(self, r: int) -> RoundResult:
         """Robustly aggregate the round's DP-noised deltas and mint a new model.
 
         Two principled core primitives do the work (imported, never
@@ -902,31 +975,77 @@ class ControlPlane:
             self.store.persist_model(genesis)
             self.store.persist_meta("plane", self._meta_snapshot())
 
+    def _transaction_to_features(self, txn: dict) -> np.ndarray:
+        """Build a FEATURE_DIM vector from the ACTUAL request transaction.
+
+        Named features pass through directly; if the caller only signals a
+        campaign match we synthesise the "safe-account mule" shape the federated
+        model learned (benign generic axes, strong campaign signature) — mirrors
+        the node's `transaction_to_features` so the served model and the trained
+        model speak the same feature contract."""
+        x = np.zeros(FEATURE_DIM, dtype=np.float64)
+        for idx, name in enumerate(FEATURE_ORDER):
+            if name in txn:
+                try:
+                    x[idx] = float(txn[name])
+                except (TypeError, ValueError):
+                    pass
+        if "campaignSignature" in txn or "campaignSig" in txn:
+            sig = float(txn.get("campaignSignature", txn.get("campaignSig", 1.0)))
+            x[FEATURE_ORDER.index("campaignSig")] = 1.5 * sig
+            x[FEATURE_ORDER.index("amount")] = -0.5
+            x[FEATURE_ORDER.index("velocity")] = -0.5
+            x[FEATURE_ORDER.index("fanout")] = -0.5
+            x[FEATURE_ORDER.index("accountAge")] = -2.0
+        return x
+
     def demo_predict(self, transaction: dict | None) -> dict:
         """Score a transaction with the plane's CURRENT global model (the packed
-        LiveEnsemble). Mirrors the feature row built for the campaign-signature
-        mule: benign on the generic fraud axes, strong campaign signature."""
+        LiveEnsemble) and derive the indicators from the REAL per-feature
+        contributions to that score.
+
+        The scored vector is built from the actual request transaction (not a
+        fixed mule row), and each indicator corresponds to a feature whose signed
+        contribution x[i]*w[i] pushes the score toward fraud — so two different
+        transactions yield different, faithful indicator lists. Response shape is
+        a superset of the legacy contract (`label`/`confidence`/`indicators`)
+        plus the {score, indicators, regime} fields."""
         with self._lock:
             txn = transaction or {}
-            sig = float(txn.get("campaignSignature", 1.0))
-            x = np.zeros(FEATURE_DIM)
-            x[-1] = 1.5 * sig
-            x[0] = -0.5
-            x[6] = -0.5
-            x[7] = -0.5
-            x[5] = -2.0
+            x_row = self._transaction_to_features(txn)
             w = np.asarray(self.current_model().weights, dtype=float)
-            # predict_one on the packed ensemble: a bare FEATURE_DIM row scores
-            # with a neutral categorical view (the campaign typology is tabular).
-            p = float(live_ensemble.predict_one(w, x))
+            # Score with the packed ensemble's own scorer: a bare FEATURE_DIM row
+            # is scored with a neutral categorical view (the campaign typology is
+            # tabular). predict_one handles unpacking the 617-dim packed vector.
+            p = float(live_ensemble.predict_one(w, x_row))
+
+            # Per-feature signed contribution to the logit: x[i] * w[i]. Features
+            # with a POSITIVE contribution are the ones actively driving the score
+            # toward fraud — those become the indicators, ordered by magnitude.
+            feat_w = w[:FEATURE_DIM]
+            contributions = x_row * feat_w
+            ranked = sorted(
+                range(FEATURE_DIM), key=lambda i: contributions[i], reverse=True)
+            indicators = [
+                FEATURE_INDICATORS[FEATURE_ORDER[i]]
+                for i in ranked
+                if contributions[i] > 1e-9 and FEATURE_ORDER[i] in FEATURE_INDICATORS
+            ]
+            # Always surface at least the top contributing feature so the panel
+            # never renders an empty list (e.g. an untrained genesis model where
+            # all weights are zero falls back to the dominant feature axis).
+            if not indicators:
+                top = ranked[0]
+                indicators = [FEATURE_INDICATORS.get(
+                    FEATURE_ORDER[top], "model-flagged anomaly")]
+
+            label = "fraud" if p >= 0.5 else "legitimate"
             return {
-                "label": "fraud" if p >= 0.5 else "legitimate",
+                "label": label,
                 "confidence": round(p, 3),
-                "indicators": [
-                    "new account",
-                    "high-velocity fan-out to multiple recipients",
-                    "matches active campaign signature",
-                ],
+                "score": round(p, 3),
+                "regime": "federated",
+                "indicators": indicators,
             }
 
     def _publish_demo_round(self, banks: list[dict], rejected: list[str]) -> None:
@@ -939,6 +1058,17 @@ class ControlPlane:
             self._publish("attack_detected", {"bankId": mid, "rejected": True})
 
     # -- SSE --------------------------------------------------------------
+    def set_event_loop(self, loop) -> None:
+        """Capture the server's running event loop at startup.
+
+        State-mutating handlers (enroll/aggregate/...) run in FastAPI's sync
+        threadpool, i.e. on worker threads with NO running event loop. Pushing to
+        an asyncio.Queue from there with a bare `put_nowait` is NOT thread-safe
+        and can silently lose/corrupt events. With the loop captured, `_publish`
+        schedules the enqueue back ONTO the loop via `call_soon_threadsafe` (the
+        same pattern the node uses), so events are delivered reliably."""
+        self._event_loop = loop
+
     def subscribe(self, queue) -> None:
         self._subscribers.append(queue)
 
@@ -947,8 +1077,18 @@ class ControlPlane:
             self._subscribers.remove(queue)
 
     def _publish(self, event: str, data: dict) -> None:
+        loop = getattr(self, "_event_loop", None)
+        msg = {"event": event, "data": data}
         for q in list(self._subscribers):
             try:
-                q.put_nowait({"event": event, "data": data})
+                if loop is not None and not loop.is_closed():
+                    # Thread-safe hand-off from a worker thread back to the loop
+                    # that owns the asyncio.Queue. Never lose the event.
+                    loop.call_soon_threadsafe(q.put_nowait, msg)
+                else:
+                    # No loop captured (unit tests drain a plain queue inline):
+                    # a direct put_nowait is correct since there is no concurrent
+                    # loop consuming the queue.
+                    q.put_nowait(msg)
             except Exception:
                 pass

@@ -10,6 +10,8 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import os as _os
+import uuid
 from typing import Any
 
 import jwt
@@ -18,6 +20,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+# Audience/issuer the node->plane JWTs are minted for and verified against.
+# Binding `aud`/`iss` stops a member token issued for one service being replayed
+# against another. Overridable via env so a deployment can scope them per-fleet.
+JWT_AUDIENCE = _os.environ.get("VERITAS_JWT_AUD", "veritas-control-plane")
+JWT_ISSUER = _os.environ.get("VERITAS_JWT_ISS", "veritas-node")
+# Shorter default TTL: a node->plane token only needs to live long enough to
+# submit a round's worth of updates. Tightening the window limits replay value.
+JWT_DEFAULT_TTL_SECONDS = int(_os.environ.get("VERITAS_JWT_TTL", "300"))
 
 
 # ---------------------------------------------------------------------------
@@ -125,27 +136,44 @@ def verify_bytes(pub_pem: str, data: bytes, sig_hex: str) -> bool:
 # EdDSA JWTs (member node -> plane auth)
 # ---------------------------------------------------------------------------
 def make_member_jwt(
-    priv_pem: str, member_id: str, tenant_id: str, ttl_seconds: int = 3600
+    priv_pem: str, member_id: str, tenant_id: str,
+    ttl_seconds: int = JWT_DEFAULT_TTL_SECONDS,
+    audience: str = JWT_AUDIENCE, issuer: str = JWT_ISSUER,
 ) -> str:
-    """Sign a node->plane JWT with the member's private key (EdDSA)."""
+    """Sign a node->plane JWT with the member's private key (EdDSA).
+
+    The token carries `aud`/`iss` (so it can only be redeemed against this
+    control plane) and a unique `jti` (so a single token is individually
+    identifiable / revocable). TTL is short by default.
+    """
     now = _dt.datetime.now(_dt.timezone.utc)
     claims = {
         "sub": member_id,
         "tid": tenant_id,
+        "aud": audience,
+        "iss": issuer,
+        "jti": uuid.uuid4().hex,
         "iat": int(now.timestamp()),
         "exp": int((now + _dt.timedelta(seconds=ttl_seconds)).timestamp()),
     }
     return jwt.encode(claims, load_private_key(priv_pem), algorithm="EdDSA")
 
 
-def verify_member_jwt(token: str, pub_pem: str) -> dict:
+def verify_member_jwt(
+    token: str, pub_pem: str,
+    audience: str = JWT_AUDIENCE, issuer: str = JWT_ISSUER,
+) -> dict:
     """Verify a node->plane JWT against the member's registered public key.
 
-    Raises jwt.PyJWTError on any failure (bad signature, expired, etc.).
+    Verifies signature, expiry, and the `aud`/`iss` binding, and requires the
+    `sub`/`tid`/`exp`/`aud`/`iss`/`jti` claims to be present. Raises
+    jwt.PyJWTError on any failure (bad signature, expired, wrong audience, etc.).
     """
     return jwt.decode(
         token,
         load_public_key(pub_pem),
         algorithms=["EdDSA"],
-        options={"require": ["sub", "tid", "exp"]},
+        audience=audience,
+        issuer=issuer,
+        options={"require": ["sub", "tid", "exp", "aud", "iss", "jti"]},
     )

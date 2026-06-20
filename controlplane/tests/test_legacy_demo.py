@@ -86,11 +86,15 @@ def test_reported_metrics_drive_banks_and_counters_accrue(client, make_member,
     assert "campaignActive" in state and "attackActive" in state
 
 
-def test_campaign_and_attack_inject_set_flags(client, make_member):
+def test_campaign_and_attack_inject_set_flags(client, make_member, admin_headers):
     make_member("node0")  # need a member for attack target realism
-    r1 = client.post("/campaign/inject", json={"typology": "APP fraud"})
+    # Demo controls mutate plane state -> admin-gated.
+    assert client.post("/campaign/inject", json={"typology": "x"}).status_code == 401
+    r1 = client.post("/campaign/inject", json={"typology": "APP fraud"},
+                     headers=admin_headers)
     assert r1.status_code == 200 and r1.json() == {"ok": True}
-    r2 = client.post("/attack/inject", json={"memberId": "node0"})
+    r2 = client.post("/attack/inject", json={"memberId": "node0"},
+                     headers=admin_headers)
     assert r2.status_code == 200 and r2.json() == {"ok": True}
 
     state = client.get("/state").json()
@@ -103,7 +107,8 @@ def test_campaign_and_attack_inject_set_flags(client, make_member):
     assert "epoch" in cur
 
 
-def test_round_step_advances_and_returns_state(client, make_member, honest_delta):
+def test_round_step_advances_and_returns_state(client, make_member, honest_delta,
+                                               admin_headers):
     # Raise threshold so updates accumulate without auto-aggregating.
     from controlplane.server import app as app_module
     app_module.plane.min_updates = 99
@@ -114,14 +119,16 @@ def test_round_step_advances_and_returns_state(client, make_member, honest_delta
                  recall=0.9, silo_recall=0.6)
 
     before = client.get("/state").json()["round"]
-    state = client.post("/round/step").json()
+    assert client.post("/round/step").status_code == 401  # admin-gated
+    state = client.post("/round/step", headers=admin_headers).json()
     assert state["round"] == before + 1
     assert "banks" in state and "counters" in state
     # Global model advanced + auto-promoted.
     assert app_module.plane.promoted_version >= 1
 
 
-def test_sim_reset_bumps_epoch_and_clears(client, make_member, honest_delta):
+def test_sim_reset_bumps_epoch_and_clears(client, make_member, honest_delta,
+                                          admin_headers):
     from controlplane.server import app as app_module
     app_module.plane.min_updates = 3
     nodes = [make_member(f"node{i}") for i in range(3)]
@@ -129,10 +136,11 @@ def test_sim_reset_bumps_epoch_and_clears(client, make_member, honest_delta):
     for i, n in enumerate(nodes):
         n.submit(1, base + np.asarray(honest_delta(seed=90 + i, scale=0.004)),
                  recall=0.9, silo_recall=0.5)
-    client.post("/campaign/inject", json={"typology": "x"})
+    client.post("/campaign/inject", json={"typology": "x"}, headers=admin_headers)
 
     epoch_before = client.get("/v1/rounds/current").json()["epoch"]
-    state = client.post("/sim/reset").json()
+    assert client.post("/sim/reset").status_code == 401  # admin-gated
+    state = client.post("/sim/reset", headers=admin_headers).json()
     assert state["round"] == 1
     assert state["campaignActive"] is False
     assert state["attackActive"] is False

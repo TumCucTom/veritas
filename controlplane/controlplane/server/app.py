@@ -9,8 +9,10 @@ the signed Merkle transparency log, and the per-tenant console + SSE events.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 import threading
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,15 +25,51 @@ from ..transparency import (  # noqa: F401 (re-exported for tests)
     verify_inclusion_proof,
 )
 
-ADMIN_KEY = os.environ.get("VERITAS_ADMIN_KEY", "dev-admin-key")
+_INSECURE_DEFAULT_ADMIN_KEY = "dev-admin-key"
+ADMIN_KEY = os.environ.get("VERITAS_ADMIN_KEY", _INSECURE_DEFAULT_ADMIN_KEY)
+# Dev mode: when set, the insecure default admin key + wildcard-ish localhost
+# CORS are tolerated. In any non-dev deployment, shipping the default admin key
+# is a hard startup error (fail fast) rather than a silent open door.
+_DEV_MODE = os.environ.get("VERITAS_DEV", "").lower() in {"1", "true", "yes"}
+if ADMIN_KEY == _INSECURE_DEFAULT_ADMIN_KEY and not _DEV_MODE:
+    raise RuntimeError(
+        "Refusing to start: VERITAS_ADMIN_KEY is the insecure default "
+        "('dev-admin-key'). Set a strong VERITAS_ADMIN_KEY, or set VERITAS_DEV=1 "
+        "for local development.")
+
 # Auto-aggregation threshold. Deployments/integration tests can raise this so
 # that aggregation is driven explicitly via POST /v1/rounds/advance instead of
 # firing the moment `minUpdates` honest updates arrive.
 _MIN_UPDATES = int(os.environ.get("VERITAS_MIN_UPDATES", "3"))
 
-app = FastAPI(title="Veritas Control Plane", version="1.0.0")
+# CORS allowlist: env-driven (comma-separated origins). Default to a sensible
+# localhost set for the demo web app instead of a blanket wildcard, which (with
+# credentials) would let any site call these mutating endpoints.
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:3001,http://127.0.0.1:3001"
+)
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("VERITAS_CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
+    if o.strip()
+]
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Capture the running loop so worker-thread SSE publishes marshal back onto
+    # it thread-safely (see ControlPlane._publish).
+    plane.set_event_loop(asyncio.get_running_loop())
+    yield
+
+
+app = FastAPI(title="Veritas Control Plane", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Module-level plane so tests can import & inspect it; rebuildable via reset.
@@ -69,7 +107,10 @@ threading.Thread(target=_compute_gnn, daemon=True).start()
 # Auth dependencies
 # ---------------------------------------------------------------------------
 def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
-    if x_admin_key != plane.admin_key:
+    # Constant-time comparison: avoids leaking how many leading bytes of the key
+    # are correct via response timing.
+    expected = plane.admin_key or ""
+    if not x_admin_key or not hmac.compare_digest(str(x_admin_key), str(expected)):
         raise HTTPException(status_code=401, detail="invalid admin key")
 
 
@@ -327,22 +368,22 @@ def demo_banks():
     return plane.demo_state(_gnn_benchmark)["banks"]
 
 
-@app.post("/campaign/inject")
+@app.post("/campaign/inject", dependencies=[Depends(require_admin)])
 def demo_campaign(body: CampaignBody):
     return plane.demo_inject_campaign(body.typology)
 
 
-@app.post("/attack/inject")
+@app.post("/attack/inject", dependencies=[Depends(require_admin)])
 def demo_attack(body: AttackBody):
     return plane.demo_inject_attack(body.memberId)
 
 
-@app.post("/round/step")
+@app.post("/round/step", dependencies=[Depends(require_admin)])
 def demo_step():
     return plane.demo_step()
 
 
-@app.post("/sim/reset")
+@app.post("/sim/reset", dependencies=[Depends(require_admin)])
 def demo_reset():
     plane.demo_reset()
     return plane.demo_state(_gnn_benchmark)
@@ -350,6 +391,9 @@ def demo_reset():
 
 @app.post("/predict")
 def demo_predict(body: PredictBody):
+    # Scoring is a read-only inference call (no state mutation), so it stays
+    # open to the web app like /state — only the state-mutating demo controls
+    # are admin-gated.
     return plane.demo_predict(body.transaction)
 
 
