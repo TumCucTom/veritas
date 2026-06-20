@@ -5,7 +5,6 @@ import {
   formatGbpCompact,
   formatNumber,
   formatTimeToDetect,
-  isDetected,
 } from "../lib/format";
 
 export default function HeroCounters() {
@@ -69,7 +68,7 @@ export default function HeroCounters() {
               className="tabular font-display text-[clamp(2rem,1.4rem+2.4vw,3.25rem)] font-semibold leading-[0.95] tracking-tight"
               style={{ color: "var(--fed)" }}
             >
-              {isDetected(fedTtd) ? formatTimeToDetect(fedTtd) : "—"}
+              {formatTimeToDetect(fedTtd)}
             </p>
             <p className="eyebrow mt-1" style={{ color: "var(--fed)" }}>
               Federated
@@ -81,7 +80,7 @@ export default function HeroCounters() {
               className="tabular font-display text-[clamp(1.5rem,1.1rem+1.6vw,2.25rem)] font-semibold leading-[0.95] tracking-tight"
               style={{ color: "var(--silo)" }}
             >
-              {isDetected(siloTtd) ? formatTimeToDetect(siloTtd) : "days+"}
+              {formatTimeToDetect(siloTtd)}
             </p>
             <p className="eyebrow mt-1" style={{ color: "var(--silo)" }}>
               Siloed

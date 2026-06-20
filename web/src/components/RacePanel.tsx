@@ -2,7 +2,7 @@
 import PopulationCanvas, { POPULATION_DOTS } from "./PopulationCanvas";
 import { useVeritas } from "../lib/store";
 import { meanDetection } from "../lib/derive";
-import { formatGbp, formatNumber, formatTimeToDetect, isDetected } from "../lib/format";
+import { formatGbp, formatNumber, formatTimeToDetect } from "../lib/format";
 import type { Regime } from "../lib/types";
 
 const COPY: Record<
@@ -111,7 +111,7 @@ export default function RacePanel({ regime }: Props) {
         <Stat label="Victims" value={formatNumber(victims)} accent={accent} emphasise={!isFed} />
         <Stat
           label="Time to detect"
-          value={isDetected(ttd) ? formatTimeToDetect(ttd) : "days+"}
+          value={formatTimeToDetect(ttd)}
           accent={accent}
           emphasise={isFed}
         />
