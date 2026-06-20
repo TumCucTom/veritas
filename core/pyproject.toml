@@ -5,6 +5,9 @@ requires-python=">=3.11"
 dependencies=["numpy>=2.1","fastapi>=0.111","uvicorn[standard]>=0.30","sse-starlette>=2.1","pydantic>=2.7"]
 [project.optional-dependencies]
 dev=["pytest>=8.2","httpx>=0.27"]
+# flock-sdk is FREE and LOCAL: a tiny pure-Python FlockModel ABC -- no API key,
+# no hosted endpoint, no Docker. Kept as an optional extra so suites that don't
+# need it stay lean; veritas_core.flock_adapter uses the real SDK when installed.
 flock=["flock-sdk"]
 [tool.setuptools]
 packages=["veritas_core","server"]
