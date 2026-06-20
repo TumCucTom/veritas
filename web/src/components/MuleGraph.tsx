@@ -6,9 +6,8 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 type GraphNode = {
   id: number;
   bank: number; // 0..7
-  x: number; // [-1, 1] precomputed force-directed layout
-  y: number; // [-1, 1]
   mule: boolean;
+  ring: number; // 0..5 for mules, -1 for normal accounts
 };
 
 type GraphFrame = {
@@ -17,46 +16,32 @@ type GraphFrame = {
 };
 
 type GraphData = {
+  bankNames: string[];
   nodes: GraphNode[];
-  edges: [number, number][]; // node-index pairs
+  edges: [number, number][]; // ALL edges (node-index pairs)
+  ringEdges: [number, number][]; // cross-bank mule-ring links (subset of edges)
   frames: GraphFrame[];
-  meta: { banks: number; note: string };
+  meta: { banks: number; rings: number; note: string };
 };
 
 // Per-round caption — narrative arc from blind silo to federated reveal.
 const CAPTIONS = [
-  "Round 0 — no single bank sees the whole ring.",
+  "Round 0 — each bank sees only its own slice.",
   "Round 1 — local signal stirs on a few accounts.",
-  "Round 2 — neighbours start exchanging suspicion.",
+  "Round 2 — neighbouring banks exchange suspicion.",
   "Round 4 — message-passing links the corridors.",
-  "Round 6 — the cross-bank ring begins to glow.",
-  "Round 9 — federation surfaces the cross-bank mule network.",
+  "Round 6 — the cross-bank rings begin to glow.",
+  "Round 9 — federation surfaces the full cross-bank rings.",
 ] as const;
 
 // Tuning ──────────────────────────────────────────────────────────────────
-const STEP_MS = 1200; // time per round transition
-const FINAL_PAUSE_MS = 2200; // extra dwell on the last frame before looping
-const HOT_THRESHOLD = 0.5; // score above which an account is "surfaced"
+const STEP_MS = 1300; // time per round transition
+const FINAL_PAUSE_MS = 2400; // extra dwell on the last frame before looping
+const HOT_THRESHOLD = 0.5; // score above which a mule account is "surfaced"
 
-// Colour ramp between calm slate-teal and hot amber/rose. Returns rgb tuple.
-function rampColor(score: number, out: [number, number, number]) {
-  // calm: slate-teal #3f6f7a-ish → warm: rose #fb7185 → hot: amber #fbbf24
-  const s = clamp01(score);
-  if (s < 0.5) {
-    // slate-teal → rose
-    const t = s / 0.5;
-    out[0] = lerp(63, 251, t);
-    out[1] = lerp(111, 113, t);
-    out[2] = lerp(122, 133, t);
-  } else {
-    // rose → amber
-    const t = (s - 0.5) / 0.5;
-    out[0] = lerp(251, 251, t);
-    out[1] = lerp(113, 191, t);
-    out[2] = lerp(133, 36, t);
-  }
-  return out;
-}
+// Calm slate-teal for cool/normal state → warm amber/gold for lit mule state.
+// Distinct, subtle hue per ring so the six rings stay separable when warm.
+const RING_HUES = [42, 30, 18, 50, 8, 36]; // degrees, all warm (amber→rose)
 
 function clamp01(v: number) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -81,7 +66,9 @@ function MuleGraphInner() {
   const [paused, setPaused] = useState(false);
 
   // Manual scrub override: when set, the loop holds on this frame index.
+  // `scrubbing` mirrors it for render-time UI (refs must not be read in render).
   const scrubRef = useRef<number | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
 
   // ── Fetch own data ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -104,40 +91,93 @@ function MuleGraphInner() {
     };
   }, []);
 
-  // Total mules — denominator for the recall stat (computed once).
   const totalMules = useMemo(
     () => (data ? data.nodes.reduce((n, node) => n + (node.mule ? 1 : 0), 0) : 0),
     [data],
   );
   const frameCount = data?.frames.length ?? 0;
 
-  // ── Precompute edge endpoints + cross-bank flags (no per-frame allocation) ─
-  // Stored as flat arrays in screen-normalised [0,1] space derived from x,y.
+  // ── Precompute a bank-anchored layout ONCE ────────────────────────────────
+  // 8 banks sit evenly around a large circle. Each account is a small
+  // deterministic-jitter cluster near its bank anchor; mules are pulled a bit
+  // toward the inner edge so the cross-bank ring arcs read across the hub.
+  // All positions are in normalised [0,1] space, mapped to pixels at draw time.
   const precomp = useMemo(() => {
     if (!data) return null;
-    const { nodes, edges } = data;
-    const nx = new Float32Array(nodes.length); // base normalised x [0,1]
-    const ny = new Float32Array(nodes.length);
-    for (let i = 0; i < nodes.length; i++) {
-      nx[i] = (nodes[i].x + 1) / 2;
-      ny[i] = (nodes[i].y + 1) / 2;
+    const { nodes, ringEdges, meta } = data;
+    const nBanks = meta.banks;
+    const n = nodes.length;
+
+    // Bank anchor positions on a circle (normalised, centred at 0.5,0.5).
+    const RING_R = 0.36; // bank-anchor radius
+    const bankAngle = new Float32Array(nBanks);
+    const bankAX = new Float32Array(nBanks);
+    const bankAY = new Float32Array(nBanks);
+    for (let b = 0; b < nBanks; b++) {
+      // start at top (-90°), go clockwise
+      const a = -Math.PI / 2 + (b / nBanks) * Math.PI * 2;
+      bankAngle[b] = a;
+      bankAX[b] = 0.5 + Math.cos(a) * RING_R;
+      bankAY[b] = 0.5 + Math.sin(a) * RING_R;
     }
-    const ea = new Int32Array(edges.length); // endpoint a index
-    const eb = new Int32Array(edges.length); // endpoint b index
-    const cross = new Uint8Array(edges.length); // 1 if endpoints differ in bank
-    let crossCount = 0;
-    for (let e = 0; e < edges.length; e++) {
-      const a = edges[e][0];
-      const b = edges[e][1];
-      ea[e] = a;
-      eb[e] = b;
-      const c = nodes[a].bank !== nodes[b].bank ? 1 : 0;
-      cross[e] = c;
-      crossCount += c;
+
+    // Per-node base positions (normalised).
+    const nx = new Float32Array(n);
+    const ny = new Float32Array(n);
+    // deterministic hash jitter from node id (no RNG, stable across renders)
+    const frac = (v: number) => v - Math.floor(v);
+    for (let i = 0; i < n; i++) {
+      const b = nodes[i].bank;
+      const a = bankAngle[b];
+      const h1 = frac(Math.sin(i * 12.9898 + 4.1) * 43758.5453);
+      const h2 = frac(Math.sin(i * 78.233 + 1.7) * 12543.1234);
+      const isMule = nodes[i].mule;
+      // tangential spread along the bank arc + radial offset
+      const spread = (h1 - 0.5) * 0.16; // along-arc
+      // mules sit closer to centre (inner edge) so arcs bow inward cleanly
+      const radial = isMule ? -0.04 - h2 * 0.05 : 0.01 + h2 * 0.085;
+      const r = RING_R + radial;
+      const ang = a + spread;
+      nx[i] = 0.5 + Math.cos(ang) * r;
+      ny[i] = 0.5 + Math.sin(ang) * r;
     }
-    // Reusable score buffer interpolated each draw — allocated once.
-    const interp = new Float32Array(nodes.length);
-    return { nx, ny, ea, eb, cross, crossCount, interp };
+
+    // Ring-edge endpoints + quadratic control point bowing toward centre.
+    const re = ringEdges;
+    const reA = new Int32Array(re.length);
+    const reB = new Int32Array(re.length);
+    const reCX = new Float32Array(re.length); // control-point x (normalised)
+    const reCY = new Float32Array(re.length);
+    const reHue = new Float32Array(re.length); // ring hue for tint
+    for (let e = 0; e < re.length; e++) {
+      const a = re[e][0];
+      const b = re[e][1];
+      reA[e] = a;
+      reB[e] = b;
+      const mx = (nx[a] + nx[b]) / 2;
+      const my = (ny[a] + ny[b]) / 2;
+      // pull the midpoint toward the centre (0.5,0.5) to bow the arc inward
+      reCX[e] = lerp(mx, 0.5, 0.55);
+      reCY[e] = lerp(my, 0.5, 0.55);
+      const ring = nodes[a].ring >= 0 ? nodes[a].ring : nodes[b].ring;
+      reHue[e] = RING_HUES[((ring % RING_HUES.length) + RING_HUES.length) % RING_HUES.length];
+    }
+
+    // Reusable interpolated-score buffer (allocated once).
+    const interp = new Float32Array(n);
+    return {
+      nBanks,
+      bankAX,
+      bankAY,
+      nx,
+      ny,
+      reA,
+      reB,
+      reCX,
+      reCY,
+      reHue,
+      interp,
+    };
   }, [data]);
 
   // ── Single RAF render loop, held in refs so it isn't recreated on render ──
@@ -151,9 +191,11 @@ function MuleGraphInner() {
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const { nx, ny, ea, eb, cross, interp } = precomp;
-    const { nodes, frames } = data;
+    const { bankAX, bankAY, nx, ny, reA, reB, reCX, reCY, reHue, interp } = precomp;
+    const { nodes, frames, bankNames } = data;
     const n = nodes.length;
+    const nBanks = precomp.nBanks;
+    const reLen = reA.length;
     const lastFrame = frames.length - 1;
 
     let width = 0;
@@ -171,34 +213,31 @@ function MuleGraphInner() {
     };
     sizeCanvas();
 
-    // Loop bookkeeping — all in closure-local mutable state, not React state.
-    // The effect re-runs whenever `paused` flips, so a plain capture is correct.
     let raf = 0;
     let visible = true;
     const pausedLocal = paused;
-    const startTs = performance.now();
-    // Position within the timeline: which step we're transitioning across.
     let stepStart = performance.now();
-    let fromFrame = 0;
+    let fromFrame = reduceMotion ? lastFrame : 0; // reduced-motion holds final
 
     let lastUiRound = -1;
     let lastUiHot = -1;
 
-    const rgb: [number, number, number] = [0, 0, 0];
-
-    // Maps a normalised [0,1] coord to padded device-independent pixels.
-    const PAD = 26;
-    const px = (v: number) => PAD + v * (width - PAD * 2);
-    const py = (v: number) => PAD + v * (height - PAD * 2);
-
+    // Map a normalised [0,1] coord to padded device-independent pixels.
+    // A square inscribed in the panel keeps the bank circle round.
     const draw = (now: number) => {
+      const PAD = 30;
+      const side = Math.min(width, height) - PAD * 2;
+      const ox = (width - side) / 2;
+      const oy = (height - side) / 2;
+      const px = (v: number) => ox + v * side;
+      const py = (v: number) => oy + v * side;
+
       // ── Resolve the interpolation target ──────────────────────────────────
       const scrub = scrubRef.current;
       let toFrame: number;
-      let phase: number; // 0..1 eased blend between fromFrame → toFrame
+      let phase: number;
 
       if (scrub !== null) {
-        // Manual hold on a scrubbed frame — snap, no auto-advance.
         fromFrame = scrub;
         toFrame = scrub;
         phase = 1;
@@ -211,7 +250,6 @@ function MuleGraphInner() {
         const dwell = fromFrame === lastFrame ? STEP_MS + FINAL_PAUSE_MS : STEP_MS;
         const raw = (now - stepStart) / dwell;
         if (raw >= 1) {
-          // advance
           fromFrame = fromFrame >= lastFrame ? 0 : fromFrame + 1;
           stepStart = now;
           toFrame = fromFrame === lastFrame ? fromFrame : fromFrame + 1;
@@ -225,7 +263,7 @@ function MuleGraphInner() {
       const fa = frames[fromFrame].scores;
       const fb = frames[toFrame].scores;
 
-      // Interpolate per-node scores + tally hot accounts in one pass.
+      // Interpolate per-node scores + tally surfaced mules in one pass.
       let hot = 0;
       for (let i = 0; i < n; i++) {
         const s = fa[i] + (fb[i] - fa[i]) * phase;
@@ -233,61 +271,83 @@ function MuleGraphInner() {
         if (nodes[i].mule && s > HOT_THRESHOLD) hot++;
       }
 
-      // Gentle idle breathing (purely cosmetic positional drift).
-      const breath = reduceMotion ? 0 : Math.sin((now - startTs) / 2600) * 0.5;
-      const drift = reduceMotion ? 0 : 1.4;
-
       // ── Background ────────────────────────────────────────────────────────
       ctx.clearRect(0, 0, width, height);
       const bg = ctx.createLinearGradient(0, 0, width, height);
-      bg.addColorStop(0, "rgba(10,14,22,0.96)");
-      bg.addColorStop(0.6, "rgba(13,19,32,0.96)");
-      bg.addColorStop(1, "rgba(19,27,44,0.96)");
+      bg.addColorStop(0, "rgba(8,12,20,0.96)");
+      bg.addColorStop(0.6, "rgba(11,16,28,0.96)");
+      bg.addColorStop(1, "rgba(16,23,38,0.96)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
 
-      // ── Edges: same-bank first (subtle), then cross-bank (accented) ───────
-      // Two passes so each strokeStyle is set once.
-      ctx.lineWidth = 0.7;
-      ctx.strokeStyle = "rgba(110,122,144,0.13)";
+      // ── Faint bank ring guide + anchor labels ─────────────────────────────
+      const cx0 = px(0.5);
+      const cy0 = py(0.5);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(120,140,170,0.07)";
       ctx.beginPath();
-      for (let e = 0; e < ea.length; e++) {
-        if (cross[e]) continue;
-        const a = ea[e];
-        const b = eb[e];
-        ctx.moveTo(px(nx[a]) + dx(a), py(ny[a]) + dy(a));
-        ctx.lineTo(px(nx[b]) + dx(b), py(ny[b]) + dy(b));
-      }
+      ctx.arc(cx0, cy0, 0.36 * side, 0, Math.PI * 2);
       ctx.stroke();
 
-      // Cross-bank links accented — brightness keyed to the hotter endpoint.
-      for (let e = 0; e < ea.length; e++) {
-        if (!cross[e]) continue;
-        const a = ea[e];
-        const b = eb[e];
-        const heat = Math.max(interp[a], interp[b]);
-        const alpha = 0.16 + heat * 0.42;
-        ctx.strokeStyle = `rgba(214,168,91,${alpha.toFixed(3)})`;
-        ctx.lineWidth = 0.8 + heat * 1.1;
+      ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (let b = 0; b < nBanks; b++) {
+        const ax = px(bankAX[b]);
+        const ay = py(bankAY[b]);
+        // small anchor tick
+        ctx.fillStyle = "rgba(150,170,200,0.30)";
         ctx.beginPath();
-        ctx.moveTo(px(nx[a]) + dx(a), py(ny[a]) + dy(a));
-        ctx.lineTo(px(nx[b]) + dx(b), py(ny[b]) + dy(b));
+        ctx.arc(ax, ay, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        // label pushed slightly outward from centre
+        const dx = bankAX[b] - 0.5;
+        const dy = bankAY[b] - 0.5;
+        const len = Math.hypot(dx, dy) || 1;
+        const lx = px(0.5 + (dx / len) * 0.455);
+        const ly = py(0.5 + (dy / len) * 0.455);
+        ctx.fillStyle = "rgba(176,192,214,0.62)";
+        ctx.fillText(bankNames[b] ?? `Bank ${b}`, lx, ly);
+      }
+
+      // ── Cross-bank ring arcs (the signal): curved, bowed toward centre ────
+      // Brightness keyed to the hotter endpoint; round 0 → dim grey,
+      // later rounds → warm gold tinted subtly by ring.
+      for (let e = 0; e < reLen; e++) {
+        const a = reA[e];
+        const b = reB[e];
+        const heat = clamp01(Math.max(interp[a], interp[b]));
+        const x1 = px(nx[a]);
+        const y1 = py(ny[a]);
+        const x2 = px(nx[b]);
+        const y2 = py(ny[b]);
+        const cxp = px(reCX[e]);
+        const cyp = py(reCY[e]);
+        // grey when cold → warm when hot
+        const sat = Math.round(lerp(6, 80, heat));
+        const light = Math.round(lerp(38, 60, heat));
+        const alpha = lerp(0.1, 0.62, heat);
+        ctx.strokeStyle = `hsla(${reHue[e]},${sat}%,${light}%,${alpha.toFixed(3)})`;
+        ctx.lineWidth = lerp(0.8, 2.0, heat);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.quadraticCurveTo(cxp, cyp, x2, y2);
         ctx.stroke();
       }
 
-      // ── Glow pass (additive) for hot nodes ────────────────────────────────
+      // ── Glow pass (additive) for warm mule nodes ──────────────────────────
       ctx.globalCompositeOperation = "lighter";
       for (let i = 0; i < n; i++) {
+        if (!nodes[i].mule) continue;
         const s = interp[i];
-        if (s < 0.34) continue;
-        const cx = px(nx[i]) + dx(i);
-        const cy = py(ny[i]) + dy(i);
-        rampColor(s, rgb);
-        const glowR = 6 + s * 22;
+        if (s < 0.32) continue;
+        const cx = px(nx[i]);
+        const cy = py(ny[i]);
+        const glowR = 5 + s * 20;
         const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
-        const a = (s - 0.3) * 0.5;
-        g.addColorStop(0, `rgba(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0},${a.toFixed(3)})`);
-        g.addColorStop(1, `rgba(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0},0)`);
+        const a = (s - 0.3) * 0.55;
+        g.addColorStop(0, `hsla(40,95%,62%,${a.toFixed(3)})`);
+        g.addColorStop(1, "hsla(40,95%,62%,0)");
         ctx.fillStyle = g;
         ctx.beginPath();
         ctx.arc(cx, cy, glowR, 0, Math.PI * 2);
@@ -296,40 +356,45 @@ function MuleGraphInner() {
       ctx.globalCompositeOperation = "source-over";
 
       // ── Node bodies ───────────────────────────────────────────────────────
+      // Normal accounts: small, dim slate/teal. Mules: larger, warm, keyed
+      // to score (look like normals when cold, light up gold when surfaced).
       for (let i = 0; i < n; i++) {
+        const cx = px(nx[i]);
+        const cy = py(ny[i]);
+        if (!nodes[i].mule) {
+          ctx.fillStyle = "rgba(96,126,140,0.55)";
+          ctx.beginPath();
+          ctx.arc(cx, cy, 2.1, 0, Math.PI * 2);
+          ctx.fill();
+          continue;
+        }
         const s = interp[i];
-        const cx = px(nx[i]) + dx(i);
-        const cy = py(ny[i]) + dy(i);
-        const r = 2.4 + s * 4.2;
-        rampColor(s, rgb);
-        ctx.fillStyle = `rgb(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0})`;
+        const r = 3.0 + s * 4.0;
+        // cold mule reads like a normal account (cool); warms with score
+        const sat = Math.round(lerp(14, 92, s));
+        const light = Math.round(lerp(46, 60, s));
+        ctx.fillStyle = `hsl(${lerp(200, 40, s)},${sat}%,${light}%)`;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.fill();
-        // Outline mule nodes so the ground-truth ring is legible.
-        if (nodes[i].mule) {
+        // thin warm rim once surfaced
+        if (s > 0.4) {
           ctx.lineWidth = 1;
-          ctx.strokeStyle = `rgba(242,239,230,${(0.28 + s * 0.55).toFixed(3)})`;
+          ctx.strokeStyle = `rgba(246,233,205,${(0.25 + s * 0.5).toFixed(3)})`;
           ctx.stroke();
         }
       }
 
       // ── Throttled UI sync ────────────────────────────────────────────────
-      const displayRound = frames[scrub !== null ? scrub : toFrame].round;
+      const uiFrame = scrub !== null ? scrub : toFrame;
+      const displayRound = frames[uiFrame].round;
       if (displayRound !== lastUiRound) {
         lastUiRound = displayRound;
-        setActiveRound(scrub !== null ? scrub : toFrame);
+        setActiveRound(uiFrame);
       }
       if (hot !== lastUiHot) {
         lastUiHot = hot;
         setHotCount(hot);
-      }
-
-      function dx(i: number) {
-        return drift * Math.sin((nx[i] + ny[i]) * 6 + breath);
-      }
-      function dy(i: number) {
-        return drift * Math.cos((nx[i] - ny[i]) * 6 + breath);
       }
 
       if (visible) raf = requestAnimationFrame(draw);
@@ -341,7 +406,6 @@ function MuleGraphInner() {
     };
     const stop = () => cancelAnimationFrame(raf);
 
-    // Pause offscreen.
     const io = new IntersectionObserver(
       (entries) => {
         const e = entries[0];
@@ -371,12 +435,10 @@ function MuleGraphInner() {
       ro.disconnect();
     };
     // Re-create loop when data/precomp ready or pause toggles.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, precomp, paused]);
 
   const caption =
     CAPTIONS[Math.min(activeRound, CAPTIONS.length - 1)] ?? CAPTIONS[CAPTIONS.length - 1];
-  const recallPct = totalMules > 0 ? Math.round((hotCount / totalMules) * 100) : 0;
   const roundLabel =
     data && data.frames[activeRound] ? data.frames[activeRound].round : activeRound;
 
@@ -384,11 +446,11 @@ function MuleGraphInner() {
   if (error) {
     return (
       <section
-        aria-label="Cross-bank mule graph"
+        aria-label="Cross-bank mule rings"
         className="rise overflow-hidden rounded-[20px] border bg-bg-surface/80 p-6 backdrop-blur-sm sm:p-8"
         style={{ borderColor: "var(--border-default)", boxShadow: "var(--shadow-panel)" }}
       >
-        <p className="eyebrow text-accent-gold">Federated GNN · cross-bank mule graph</p>
+        <p className="eyebrow text-accent-gold">Federated GNN · cross-bank mule rings</p>
         <h2 className="mt-2 font-display text-[clamp(1.5rem,1.1rem+1.6vw,2.4rem)] leading-tight tracking-tight text-text-primary">
           The ring no single bank could see.
         </h2>
@@ -412,7 +474,7 @@ function MuleGraphInner() {
         style={{ borderColor: "var(--border-default)" }}
       >
         <div>
-          <p className="eyebrow text-accent-gold">Federated GNN · cross-bank mule graph</p>
+          <p className="eyebrow text-accent-gold">Federated GNN · cross-bank mule rings</p>
           <h2
             id="mule-graph-heading"
             className="mt-2 font-display text-[clamp(1.7rem,1.2rem+2vw,3rem)] leading-tight tracking-tight text-text-primary"
@@ -420,9 +482,9 @@ function MuleGraphInner() {
             The ring no single bank could see.
           </h2>
           <p className="mt-3 max-w-3xl text-[13px] leading-relaxed text-text-secondary sm:text-[14px]">
-            A federated GraphSAGE GNN passes messages across {data?.meta.banks ?? 8} institutions
-            without moving a single record. Watch fraud scores propagate over rounds until the
-            cross-bank mule ring lights up.
+            Each of {data?.meta.banks ?? 8} banks sees only its own accounts. A federated GraphSAGE
+            GNN passes messages across institutions without moving a record — and the cross-bank
+            mule rings light up that no bank could spot alone.
           </p>
         </div>
         <div
@@ -430,40 +492,40 @@ function MuleGraphInner() {
           style={{ borderColor: "var(--border-default)", background: "var(--border-default)" }}
         >
           <Stat label="round" value={String(roundLabel).padStart(2, "0")} tone="gold" />
-          <Stat label="mules surfaced" value={`${recallPct}%`} tone="fed" />
+          <Stat label="mules surfaced" value={`${hotCount}/${totalMules}`} tone="fed" />
         </div>
       </header>
 
       <div className="p-4 sm:p-5">
         <div
           ref={wrapRef}
-          className="relative h-[360px] w-full overflow-hidden rounded-[14px] border bg-bg-deep sm:h-[440px]"
+          className="relative h-[400px] w-full overflow-hidden rounded-[14px] border bg-bg-deep sm:h-[480px]"
           style={{ borderColor: "var(--border-default)" }}
         >
           <canvas
             ref={canvasRef}
             className="block h-full w-full"
             role="img"
-            aria-label="Cross-bank mule ring graph with fraud scores propagating over rounds"
+            aria-label="Eight banks around a circle with cross-bank mule rings surfacing over federated rounds"
           />
 
-          {/* Legend overlay */}
+          {/* Legend overlay — only colours that actually appear. */}
           <div
             className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1.5 rounded-[10px] border px-3 py-2 text-[11px] backdrop-blur-sm"
             style={{
               borderColor: "var(--border-default)",
-              background: "rgba(13,19,32,0.66)",
+              background: "rgba(11,16,28,0.7)",
             }}
           >
-            <LegendRow color="#fbbf24" ring label="mule ring" />
-            <LegendRow color="#3f6f7a" label="normal account" />
-            <LegendRow color="#d6a85b" line label="cross-bank link" />
+            <LegendRow color="hsl(40,95%,60%)" glow label="mule account (surfaced)" />
+            <LegendRow color="rgba(96,126,140,0.9)" label="normal account" />
+            <LegendRow color="hsl(40,80%,58%)" line label="cross-bank mule link" />
           </div>
 
           {/* Caption overlay */}
           <p
             className="pointer-events-none absolute bottom-3 left-3 right-3 text-[12px] leading-snug text-text-secondary sm:text-[13px]"
-            style={{ textShadow: "0 1px 8px rgba(10,14,22,0.9)" }}
+            style={{ textShadow: "0 1px 8px rgba(8,12,20,0.92)" }}
           >
             {caption}
           </p>
@@ -491,6 +553,7 @@ function MuleGraphInner() {
                   aria-pressed={active}
                   onClick={() => {
                     scrubRef.current = i;
+                    setScrubbing(true);
                     setActiveRound(i);
                     setPaused(true);
                   }}
@@ -504,11 +567,12 @@ function MuleGraphInner() {
             })}
           </div>
 
-          {scrubRef.current !== null && (
+          {scrubbing && (
             <button
               type="button"
               onClick={() => {
                 scrubRef.current = null;
+                setScrubbing(false);
                 setPaused(false);
               }}
               className="rounded-full border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-muted transition-colors hover:text-text-primary"
@@ -519,7 +583,8 @@ function MuleGraphInner() {
           )}
 
           <p className="tabular ml-auto text-[12px] text-text-muted">
-            {hotCount}/{totalMules} mule accounts surfaced
+            {data?.meta.rings ?? 6} cross-bank rings · {hotCount}/{totalMules} mule accounts
+            surfaced
           </p>
         </div>
       </div>
@@ -550,12 +615,12 @@ function Stat({
 function LegendRow({
   color,
   label,
-  ring,
+  glow,
   line,
 }: {
   color: string;
   label: string;
-  ring?: boolean;
+  glow?: boolean;
   line?: boolean;
 }) {
   return (
@@ -572,8 +637,7 @@ function LegendRow({
           className="inline-block h-2.5 w-2.5 rounded-full"
           style={{
             background: color,
-            boxShadow: ring ? "0 0 6px 1px rgba(251,191,36,0.6)" : undefined,
-            border: ring ? "1px solid rgba(242,239,230,0.7)" : undefined,
+            boxShadow: glow ? "0 0 6px 1px hsla(40,95%,60%,0.7)" : undefined,
           }}
         />
       )}

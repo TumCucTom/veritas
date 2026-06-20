@@ -302,84 +302,140 @@ def _fruchterman_reingold(n, edges, seed, iters=300):
     return pos
 
 
+BANK_NAMES = ["Barclays", "NatWest", "Lloyds", "HSBC",
+              "Santander", "Monzo", "Starling", "Nationwide"]
+
+
 def gen_graph():
+    """Intentionally LEGIBLE cross-bank mule-graph data.
+
+    Built directly (not via the dense transaction generator) so the demo reads
+    clearly: 8 banks, ~11 accounts each, and 6 distinct mule RINGS. Each ring is
+    a small cycle of 4-6 mule accounts that each live in a DIFFERENT bank — so
+    every ring spans multiple institutions, which is the whole point. The ring
+    cycle edges (cross-bank, mule<->mule) are the signal; normal accounts get a
+    handful of faint intra-bank edges and no dense noise.
+
+    Per-round fraud scores rise on mule nodes across federated rounds (low/flat
+    at round 0, climbing as federation surfaces them) while normal accounts stay
+    low throughout. Deterministic from SEED.
+    """
+    rng = np.random.default_rng(SEED)
     n_banks = 8
-    net = generate_network(n_banks=n_banks, n_accounts=160, n_campaigns=7,
-                           seed=SEED)
-    n = net.n_accounts
+    rounds = [0, 1, 2, 4, 6, 9]
+    n_rings = 6
 
-    # Build a deduped undirected edge list over node indices.
-    edge_set = set()
-    for (s, d, _a, _t) in net.edges:
-        if s == d:
+    # ---- accounts per bank (~11 each → ~88 nodes) -----------------------
+    accts_per_bank = [11, 12, 11, 12, 11, 12, 11, 12]  # sums to 92
+    bank_of = []
+    for b, cnt in enumerate(accts_per_bank):
+        bank_of.extend([b] * cnt)
+    bank_of = np.array(bank_of, dtype=int)
+    n = len(bank_of)
+
+    # Group node indices by bank for ring assignment.
+    by_bank = {b: list(np.where(bank_of == b)[0]) for b in range(n_banks)}
+    # A cursor per bank so each mule we pull from a bank is a distinct account.
+    cursor = {b: 0 for b in range(n_banks)}
+
+    ring_of = np.full(n, -1, dtype=int)        # -1 == normal account
+    ring_members: list[list[int]] = []
+    ring_edges: list[tuple[int, int]] = []
+
+    # ---- build 6 cross-bank rings ---------------------------------------
+    # Each ring picks 4-6 banks (all distinct), one account from each, then
+    # wires them into a simple cycle. Different banks per member => every ring
+    # link is cross-bank.
+    ring_sizes = [5, 4, 6, 5, 4, 6]            # sums to 30 mules
+    for r in range(n_rings):
+        size = ring_sizes[r]
+        # choose `size` distinct banks deterministically
+        banks = list(rng.choice(n_banks, size=size, replace=False))
+        members = []
+        for b in banks:
+            idx = by_bank[b][cursor[b]]
+            cursor[b] += 1
+            ring_of[idx] = r
+            members.append(int(idx))
+        ring_members.append(members)
+        # wire the cycle
+        for k in range(size):
+            a = members[k]
+            c = members[(k + 1) % size]
+            ring_edges.append((min(a, c), max(a, c)))
+
+    mule_mask = ring_of >= 0
+    n_mules = int(mule_mask.sum())
+
+    # ---- a SMALL number of incidental normal edges (intra-bank, faint) --
+    # Just enough to suggest ordinary activity; not the signal.
+    normal_edges: set[tuple[int, int]] = set()
+    normals_by_bank = {
+        b: [i for i in by_bank[b] if not mule_mask[i]] for b in range(n_banks)
+    }
+    for b in range(n_banks):
+        pool = normals_by_bank[b]
+        if len(pool) < 2:
             continue
-        edge_set.add((min(s, d), max(s, d)))
-    edges = sorted(edge_set)
+        # ~2 light links per bank → ~16 incidental edges total
+        for _ in range(2):
+            a, c = rng.choice(pool, size=2, replace=False)
+            normal_edges.add((min(int(a), int(c)), max(int(a), int(c))))
 
-    pos = _norm_coords(_spring_layout(n, edges, SEED))
+    edge_set = set(ring_edges) | normal_edges
+    edges = sorted(edge_set)
+    ring_edges_sorted = sorted(set(ring_edges))
+
+    # ---- per-round scores: mules rise, normals stay low -----------------
+    # Smooth logistic-ish rise keyed to round so federation "surfacing" reads.
+    # round 0 ≈ flat/low for everyone; final mule mean ≈ 0.8, normal ≈ 0.15.
+    max_round = rounds[-1]
+    # deterministic per-node jitter so nodes don't all light in lockstep
+    mule_jit = rng.uniform(-0.06, 0.06, size=n)
+    norm_jit = rng.uniform(-0.04, 0.06, size=n)
+
+    frames = []
+    for rd in rounds:
+        t = rd / max_round                       # 0..1 progress
+        scores = np.empty(n)
+        for i in range(n):
+            if mule_mask[i]:
+                # start ~0.12, climb to ~0.8 with an accelerating curve
+                base = 0.12 + 0.70 * (t ** 1.4)
+                scores[i] = base + mule_jit[i] * t
+            else:
+                # normals hover ~0.15 with mild noise, no climb
+                scores[i] = 0.13 + norm_jit[i]
+        scores = np.clip(scores, 0.0, 1.0)
+        frames.append({"round": int(rd),
+                       "scores": [_r(v, 4) for v in scores]})
 
     nodes = []
     for i in range(n):
         nodes.append({
             "id": int(i),
-            "bank": int(net.bank_of[i]),
-            "x": _r(pos[i, 0], 4),
-            "y": _r(pos[i, 1], 4),
-            "mule": bool(net.y[i] == 1),
+            "bank": int(bank_of[i]),
+            "mule": bool(mule_mask[i]),
+            "ring": int(ring_of[i]),
         })
 
-    # ---- FEDERATED GNN training (FedAvg over per-bank subgraphs) ---------
-    in_dim = net.X.shape[1]
-    subgraphs = [net.local_subgraph(b) for b in range(n_banks)]
-    # Map a subgraph's owned local rows back to global node ids for scoring.
-    owned_global = [sg.global_ids[sg.owned_mask] for sg in subgraphs]
-    owned_local = [np.where(sg.owned_mask)[0] for sg in subgraphs]
-
-    global_w = gnn.init_weights(in_dim, hidden=8, seed=SEED)
-
-    checkpoints = [0, 1, 2, 4, 6, 9]
-    total_rounds = max(checkpoints)
-
-    def global_scores(w):
-        """Per-global-node fraud score, taken from each owning bank's GNN
-        forward pass over its own subgraph (real federated inference)."""
-        scores = np.zeros(n)
-        for sg, gids, lids in zip(subgraphs, owned_global, owned_local):
-            p = gnn.predict_proba(w, sg, in_dim)
-            scores[gids] = p[lids]
-        return scores
-
-    frames = []
-    if 0 in checkpoints:
-        frames.append({"round": 0,
-                       "scores": [_r(v, 4) for v in global_scores(global_w)]})
-
-    for rnd in range(1, total_rounds + 1):
-        updates = []
-        for sg in subgraphs:
-            updates.append(gnn.train_local(global_w, sg, epochs=12, lr=0.2,
-                                           in_dim=in_dim))
-        global_w = fedavg(updates)
-        if rnd in checkpoints:
-            frames.append({"round": int(rnd),
-                           "scores": [_r(v, 4) for v in global_scores(global_w)]})
-
-    # sanity: mule vs legit mean score at final round
     final = np.array(frames[-1]["scores"])
-    mule_mask = net.y == 1
     mule_mean = float(final[mule_mask].mean())
     legit_mean = float(final[~mule_mask].mean())
 
-    cross_edges = sum(1 for (i, j) in edges if net.bank_of[i] != net.bank_of[j])
-
     out = {
+        "bankNames": BANK_NAMES,
         "nodes": nodes,
         "edges": [[int(i), int(j)] for i, j in edges],
+        "ringEdges": [[int(i), int(j)] for i, j in ring_edges_sorted],
         "frames": frames,
         "meta": {
             "banks": n_banks,
-            "note": ("cross-bank mule rings; per-node fraud scores from the "
-                     "federated GraphSAGE GNN rise on ring nodes across rounds"),
+            "rings": n_rings,
+            "note": ("6 cross-bank mule rings spanning 8 banks; each ring is a "
+                     "cycle of accounts in different institutions. Federated "
+                     "GNN fraud scores rise on ring nodes across rounds, "
+                     "surfacing rings no single bank could see."),
         },
     }
     path = os.path.join(OUT_DIR, "graph.json")
@@ -388,11 +444,12 @@ def gen_graph():
     return path, {
         "nodes": n,
         "edges": len(edges),
-        "cross_bank_edges": cross_edges,
+        "ring_edges": len(ring_edges_sorted),
         "frames": len(frames),
         "mule_mean": mule_mean,
         "legit_mean": legit_mean,
-        "n_mules": int(mule_mask.sum()),
+        "n_mules": n_mules,
+        "rings": n_rings,
     }
 
 
@@ -554,18 +611,30 @@ def _validate_umap(d):
 
 
 def _validate_graph(d):
-    assert set(d) == {"nodes", "edges", "frames", "meta"}
+    assert set(d) == {"bankNames", "nodes", "edges", "ringEdges", "frames", "meta"}
+    assert len(d["bankNames"]) == 8 and all(isinstance(b, str) for b in d["bankNames"])
     n = len(d["nodes"])
     for nd in d["nodes"]:
-        assert set(nd) == {"id", "bank", "x", "y", "mule"}
+        assert set(nd) == {"id", "bank", "mule", "ring"}
         assert 0 <= nd["bank"] <= 7
+        assert nd["ring"] >= -1
+        assert isinstance(nd["mule"], bool)
+    edge_set = set()
     for e in d["edges"]:
         assert len(e) == 2 and 0 <= e[0] < n and 0 <= e[1] < n
+        edge_set.add((e[0], e[1]))
+    for e in d["ringEdges"]:
+        assert len(e) == 2 and 0 <= e[0] < n and 0 <= e[1] < n
+        # ring edges must be a subset of all edges
+        assert (e[0], e[1]) in edge_set
+        # ring edges must be cross-bank (members live in different banks)
+        assert d["nodes"][e[0]]["bank"] != d["nodes"][e[1]]["bank"]
     for fr in d["frames"]:
         assert set(fr) == {"round", "scores"}
         assert len(fr["scores"]) == n
         assert all(0.0 <= s <= 1.0 for s in fr["scores"])
-    assert "banks" in d["meta"]
+    assert d["meta"]["banks"] == 8
+    assert "rings" in d["meta"]
 
 
 def _validate_federation(d):
@@ -614,10 +683,10 @@ def main():
           f"(federated should beat siloed)")
     print(f"graph.json       {kb(p2):7.1f} KB  {p2}")
     print(f"  nodes={s2['nodes']} edges={s2['edges']} "
-          f"cross-bank-edges={s2['cross_bank_edges']} frames={s2['frames']} "
-          f"mules={s2['n_mules']}")
+          f"ring-edges={s2['ring_edges']} rings={s2['rings']} "
+          f"frames={s2['frames']} mules={s2['n_mules']}")
     print(f"  final mule mean score = {s2['mule_mean']:.3f}  "
-          f"legit mean = {s2['legit_mean']:.3f}")
+          f"normal mean = {s2['legit_mean']:.3f}")
     print(f"federation.json  {kb(p3):7.1f} KB  {p3}")
     print(f"  clients={s3['clients']} rejected={s3['rejected']} "
           f"poison_rejected={s3['poison_rejected']} selected={s3['selected_idx']}")
