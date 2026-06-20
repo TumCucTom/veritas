@@ -48,6 +48,14 @@ class NodeRuntime:
         self.client = FederationClient(
             self.identity, self.transport, self.attestor,
             rng=np.random.default_rng(cfg.seed + 7),
+            # Enrol with REAL bank metadata so the plane's banks[] shows the
+            # live institution (name + customer count) the engine represents.
+            display_name=self.engine.name,
+            customers=self.engine.customers,
+            # Demo-control reactions: the client reads campaignActive/epoch off
+            # the poll response and calls these to mutate LOCAL engine state.
+            on_campaign=self._on_campaign,
+            on_reset=self._on_reset,
         )
 
         self._event_sink = event_sink or (lambda ev: None)
@@ -64,6 +72,35 @@ class NodeRuntime:
         except Exception as exc:  # missing/invalid map → synthetic fallback
             self.last_error = f"connector fallback: {exc}"
             return None
+
+    # ---- demo-control reactions (wired into the federation poll loop) -----
+
+    def _is_blind(self) -> bool:
+        """Whether THIS node is the designated blind node for the demo.
+
+        A blind node injects the campaign EVAL-ONLY so its siloed baseline stays
+        blind to the typology — only the FEDERATED model (learning from seeing
+        peers) detects it. That gap is the measurable federated-vs-siloed lift.
+        """
+        return self.cfg.blind_node is not None and self.cfg.blind_node == self.cfg.node_index
+
+    def _on_campaign(self, epoch: int) -> None:
+        """Inject the cross-institution campaign locally (once per epoch).
+
+        Preserves the seeing/blind behaviour: a blind node injects eval-only
+        (``seeing=False``); every other node injects ``seeing=True`` so its
+        siloed model can learn the typology from local examples.
+        """
+        seeing = not self._is_blind()
+        self.engine.inject_campaign(seeing=seeing)
+        self._emit("campaign_injected", {
+            "bankId": self.cfg.node_id, "epoch": epoch, "seeing": seeing,
+        })
+
+    def _on_reset(self, epoch: int) -> None:
+        """Reset local engine state to genesis (epoch bump → demo re-run)."""
+        self.engine.reset_genesis()
+        self._emit("epoch_reset", {"bankId": self.cfg.node_id, "epoch": epoch})
 
     # ---- event helpers ---------------------------------------------------
 

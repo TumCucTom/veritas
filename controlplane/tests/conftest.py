@@ -55,7 +55,11 @@ class FakeMember:
     def auth_headers(self):
         return {"Authorization": f"Bearer {self.jwt()}"}
 
-    def submit(self, round_, update, recall=0.8, num_examples=1000):
+    def submit(self, round_, update, recall=0.8, num_examples=1000,
+               silo_recall=None):
+        local_metrics = {"recall": recall}
+        if silo_recall is not None:
+            local_metrics["siloRecall"] = silo_recall
         return self.client.post(
             f"/v1/rounds/{round_}/updates",
             headers=self.auth_headers(),
@@ -64,7 +68,7 @@ class FakeMember:
                 "round": round_,
                 "update": [float(x) for x in update],
                 "numExamples": num_examples,
-                "localMetrics": {"recall": recall},
+                "localMetrics": local_metrics,
                 "attestationQuote": f"quote-{self.member_id}",
             },
         )

@@ -39,6 +39,11 @@ class NodeConfig:
     # Start the federation loop automatically on app startup.
     autostart_federation: bool = True
     admin_key: str = ""
+    # If set to this node's index, the node injects the campaign EVAL-ONLY
+    # (``inject_campaign(seeing=False)``): its siloed baseline stays blind to the
+    # new typology so only the FEDERATED model (learning from seeing peers)
+    # detects it — the measurable federated-vs-siloed lift in the live demo.
+    blind_node: int | None = None
 
     @property
     def dim(self) -> int:
@@ -60,4 +65,9 @@ class NodeConfig:
             poll_interval=float(os.environ.get("VERITAS_POLL_INTERVAL", "5.0")),
             autostart_federation=os.environ.get("VERITAS_AUTOSTART_FEDERATION", "1") not in ("0", "false", "False"),
             admin_key=os.environ.get("VERITAS_ADMIN_KEY", ""),
+            blind_node=(
+                int(os.environ["VERITAS_BLIND_NODE"])
+                if os.environ.get("VERITAS_BLIND_NODE", "").strip() != ""
+                else None
+            ),
         )

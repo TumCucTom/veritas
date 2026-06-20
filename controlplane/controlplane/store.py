@@ -61,7 +61,8 @@ class Store:
                     public_key_pem TEXT NOT NULL,
                     status TEXT NOT NULL,
                     attestation_quote TEXT,
-                    last_sync TEXT
+                    last_sync TEXT,
+                    customers INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS models (
                     version INTEGER PRIMARY KEY,
@@ -94,6 +95,13 @@ class Store:
                 );
                 """
             )
+            # Migration: add the customers column to pre-existing member tables.
+            cols = {r["name"] for r in
+                    self._conn.execute("PRAGMA table_info(members)")}
+            if "customers" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE members ADD COLUMN customers INTEGER NOT NULL "
+                    "DEFAULT 0")
             self._conn.commit()
 
     # -- write-through persisters ----------------------------------------
@@ -104,17 +112,18 @@ class Store:
             self._conn.execute(
                 """INSERT INTO members
                    (member_id, display_name, tenant_id, public_key_pem,
-                    status, attestation_quote, last_sync)
-                   VALUES (?,?,?,?,?,?,?)
+                    status, attestation_quote, last_sync, customers)
+                   VALUES (?,?,?,?,?,?,?,?)
                    ON CONFLICT(member_id) DO UPDATE SET
                      display_name=excluded.display_name,
                      tenant_id=excluded.tenant_id,
                      public_key_pem=excluded.public_key_pem,
                      status=excluded.status,
                      attestation_quote=excluded.attestation_quote,
-                     last_sync=excluded.last_sync""",
+                     last_sync=excluded.last_sync,
+                     customers=excluded.customers""",
                 (m.member_id, m.display_name, m.tenant_id, m.public_key_pem,
-                 m.status, aq_text, m.last_sync),
+                 m.status, aq_text, m.last_sync, int(m.customers)),
             )
             self._conn.commit()
 

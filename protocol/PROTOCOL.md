@@ -22,8 +22,10 @@ Each member (bank node) has an Ed25519 keypair. Enrolment registers the public k
 ### Enrolment & identity
 ```
 POST /v1/members/enroll
-  body: { memberId, displayName, publicKeyPem, attestationQuote? }
+  body: { memberId, displayName?, publicKeyPem, attestationQuote?, customers?:int }
   -> 201 { memberId, tenantId, status: "pending"|"active" }
+  (displayName defaults to memberId; customers defaults to 0 — both surface in the
+   legacy demo banks[] view, see "Legacy demo contract" below)
 POST /v1/members/{memberId}/approve        (admin)  -> { memberId, status: "active" }
 GET  /v1/members                            (admin)  -> [{ memberId, displayName, tenantId, status }]
 ```
@@ -32,7 +34,10 @@ GET  /v1/members                            (admin)  -> [{ memberId, displayName
 ```
 GET  /v1/rounds/current
   -> { round:int, globalModelVersion:int, status:"open"|"aggregating"|"closed",
-       dpParams:{ maxNorm:float, sigma:float }, minUpdates:int }
+       dpParams:{ maxNorm:float, sigma:float }, minUpdates:int,
+       campaignActive:bool, attackMemberId:string|null, epoch:int }
+  (the last three are demo flags nodes react to via their poll loop — NO push:
+   inject the campaign / poison their own update / re-genesis on epoch change)
 GET  /v1/models/{version}
   -> { version:int, dim:int, weights:[float], parentVersion:int|null, status, createdAt }
 GET  /v1/models/current   -> same shape as above for the promoted global model
@@ -71,6 +76,53 @@ GET /v1/tenants/{tenantId}/state
 GET /v1/tenants/{tenantId}/provenance -> [{ round, contributors:[], rejected:[], globalRecall }]
 GET /v1/events?tenantId=...   (SSE)  named: round_complete, model_promoted, attack_detected, member_enrolled
 ```
+
+### Legacy demo contract (served by the control plane)
+The control plane ALSO serves the original single-backend demo contract — the
+exact shape the web's `useVeritas` store consumes — backed by **aggregating the
+real enrolled federation members**. Point `NEXT_PUBLIC_API_BASE` at `:9000` and
+the 8-bank race is driven by real federated node processes with zero web changes.
+These endpoints are additive; the `/v1/*` API above is unchanged.
+```
+GET  /state   -> State
+GET  /banks   -> Bank[]   (= State.banks)
+POST /campaign/inject { typology }       -> { ok:true }   (sets campaignActive)
+POST /attack/inject   { memberId }        -> { ok:true }   (sets attack target + attackActive)
+POST /round/step   -> State   (aggregate the current round's updates, auto-promote
+                                the new canary, accrue counters; if no updates yet,
+                                just open the next round)
+POST /sim/reset    -> State   (round=1, clear flags + cumulative counters,
+                                re-genesis the global model, bump epoch)
+POST /predict { transaction } -> { label, confidence, indicators[] }
+                                (scored with the plane's CURRENT global model via
+                                 core.model.predict_proba)
+GET  /events   (SSE)  named: round_complete (State), client_updated {bankId,detection},
+                              attack_detected {bankId, rejected:true}
+                      (opens by immediately emitting round_complete with State)
+```
+Shapes:
+```
+State = { round:int, running:bool, banks:Bank[],
+          counters:{ federated:Regime, siloed:Regime },
+          campaignActive:bool, attackActive:bool,
+          customerRecordsTransmitted:0, gnnBenchmark?:{...} }
+Bank  = { id, name, customers:int,
+          detection:{ federated:float, siloed:float }, poisoned:bool }
+Regime= { fraudPreventedGbp:float, timeToDetectHours:float, victims:int, lostGbp:float }
+```
+Derivation (the source of truth):
+- `banks[]` — one per ACTIVE member. `detection.federated` / `.siloed` = that
+  member's latest reported `localMetrics.recall` / `.siloRecall` (0 until first
+  report); `name`/`customers` from enroll metadata; `poisoned` = member was in the
+  latest aggregated round's `rejected` list.
+- `counters` — REPLICATE `core/veritas_core/engine.py`: each aggregated round
+  increments cumulative federated/siloed victim totals by `AT_RISK*(1-meanDetection)`
+  (mean over banks). `victims` = int of the cumulative total, `lostGbp` =
+  `victims*AVG_LOSS`, federated `fraudPreventedGbp` = `max(0, siloVictims-fedVictims)*AVG_LOSS`,
+  `timeToDetectHours` = `HOURS*round` if `meanDetection>=THRESH` else `101.0`
+  (`AVG_LOSS=255, AT_RISK=1500, THRESH=0.9, HOURS=1.0`).
+- `gnnBenchmark` — background-computed `compute_gnn_benchmark(seed=0)`; served with a
+  live `current` block keyed on `round`/`campaignActive`; omitted until ready.
 
 ---
 

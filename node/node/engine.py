@@ -122,6 +122,30 @@ class NodeEngine:
             self.eval_X, self.eval_y = inject_campaign(
                 self.eval_X, self.eval_y, 80, seed=200 + self.cfg.node_index)
 
+    def reset_genesis(self) -> None:
+        """Reset local FL state to genesis so the demo RACE can be re-run.
+
+        Re-initialises the federated/siloed/edge weights, clears the campaign
+        (fresh training + eval data, sharing off), and zeroes the running
+        counters. Called when the control plane bumps its ``epoch`` (reset
+        beat). The connector-loaded training data is regenerated to its pristine
+        (campaign-free) form so a blind node is blind again on the next run.
+        """
+        with self._lock:
+            # Pristine training/eval data (mirrors __init__ synthetic fallback;
+            # connector reloads would re-fetch upstream, which the live demo
+            # resets via a fresh process — here we regenerate the synthetic
+            # baseline so re-runs are deterministic and campaign-free).
+            self.train_X, self.train_y = make_bank_data(3000, 0.03, seed=self.cfg.seed)
+            self.eval_X, self.eval_y = make_bank_data(1000, 0.05, seed=self.cfg.seed + 100)
+            self.global_w = init_weights(FEATURE_DIM)
+            self.silo_w = init_weights(FEATURE_DIM)
+            self.edge_w = init_weights(FEATURE_DIM)
+            self.global_version = 0
+            self.round = 0
+            self.campaign_active = False
+            self.cum = {"fed": 0.0, "silo": 0.0}
+
     # ---- model sync from the federation client ---------------------------
 
     def set_global(self, weights: np.ndarray, version: int) -> None:

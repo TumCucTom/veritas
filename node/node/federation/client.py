@@ -15,10 +15,12 @@ its own JWTs locally for authenticated calls.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import httpx
 import numpy as np
 
+from veritas_core.attack import poisoned_update
 from veritas_core.dp import privatize
 from veritas_core.model import recall, train_local
 
@@ -37,6 +39,11 @@ class RoundResult:
     global_version_after: int
     update_norm: float
     reason: str = ""
+    # Demo-control reactions taken THIS round (for tests / observability).
+    campaign_injected: bool = False
+    poisoned: bool = False
+    epoch: int = 0
+    reset: bool = False
 
 
 class FederationClient:
@@ -47,6 +54,10 @@ class FederationClient:
         attestor: Attestor,
         *,
         rng: np.random.Generator | None = None,
+        display_name: str | None = None,
+        customers: int | None = None,
+        on_campaign: Callable[[int], None] | None = None,
+        on_reset: Callable[[int], None] | None = None,
     ):
         self.identity = identity
         self.transport = transport
@@ -56,6 +67,21 @@ class FederationClient:
         self.status = "unenrolled"
         self.last_round_submitted: int | None = None
 
+        # ---- enrol metadata (real bank name + customer count) -------------
+        # So the plane's banks[] shows the real institution, not the opaque id.
+        self.display_name = display_name
+        self.customers = customers
+
+        # ---- demo-control reaction hooks ----------------------------------
+        # ``on_campaign(epoch)`` injects the campaign LOCALLY (the runtime wires
+        # this to the engine, choosing seeing/blind). ``on_reset(epoch)`` resets
+        # local engine state to genesis. The client owns epoch bookkeeping so it
+        # injects at most ONCE per epoch and detects epoch bumps (resets).
+        self._on_campaign = on_campaign
+        self._on_reset = on_reset
+        self.current_epoch = 0
+        self._campaign_injected_epoch: int | None = None
+
     # ---- enrolment -------------------------------------------------------
 
     def enroll(self) -> dict:
@@ -63,10 +89,15 @@ class FederationClient:
         quote = self.attestor.attest()
         body = {
             "memberId": self.identity.member_id,
-            "displayName": self.identity.member_id,
+            # Real bank name (engine.name) + customer count (engine.customers) so
+            # the plane's banks[] shows the live institution. Fall back to the
+            # opaque memberId if the runtime didn't supply metadata.
+            "displayName": self.display_name or self.identity.member_id,
             "publicKeyPem": self.identity.public_key_pem(),
             "attestationQuote": quote.to_wire(),
         }
+        if self.customers is not None:
+            body["customers"] = int(self.customers)
         resp = self.transport.enroll(body)
         # Plane may assign/override the tenant; honour it for subsequent JWTs.
         self.identity.tenant_id = resp.get("tenantId", self.identity.tenant_id)
@@ -88,6 +119,34 @@ class FederationClient:
         max_norm = float(dp.get("maxNorm", MAX_NORM))
         sigma = float(dp.get("sigma", SIGMA))
 
+        # ---- demo-control flags advertised in round-info ------------------
+        # The control plane piggybacks the demo RACE state on the EXISTING poll
+        # response (no new push channel): campaignActive / attackMemberId / epoch.
+        campaign_active = bool(rnd.get("campaignActive", False))
+        attack_member_id = rnd.get("attackMemberId")
+        epoch = int(rnd.get("epoch", 0))
+
+        reset_done = False
+        # EPOCH BUMP (reset): when the plane advances the epoch, reset local
+        # engine state to genesis so the demo can be re-run from scratch. Clear
+        # our per-epoch injection bookkeeping too.
+        if epoch != self.current_epoch:
+            self.current_epoch = epoch
+            self._campaign_injected_epoch = None
+            if self._on_reset is not None:
+                self._on_reset(epoch)
+                reset_done = True
+
+        campaign_injected_now = False
+        # CAMPAIGN: when the flag flips true and we haven't injected for THIS
+        # epoch yet, inject the campaign locally (the runtime decides seeing vs
+        # blind). Tracked per-epoch so it only injects once per run.
+        if campaign_active and self._campaign_injected_epoch != epoch:
+            self._campaign_injected_epoch = epoch
+            if self._on_campaign is not None:
+                self._on_campaign(epoch)
+                campaign_injected_now = True
+
         model = self.transport.get_current_model()
         global_w = np.asarray(model["weights"], dtype=np.float64)
         version_before = int(model.get("version", 0))
@@ -98,11 +157,28 @@ class FederationClient:
         priv = privatize(update, max_norm, sigma, self.rng)
         local_recall = recall(local_w, X, y)
 
+        # ATTACK: if the plane has designated ME as the attacker this round,
+        # poison my (already DP-clipped) update — sign-flip + amplify (reused
+        # from core) — so the plane's Multi-Krum rejects me. Drives the real
+        # attack_detected beat in the live federation.
+        poisoned = False
+        if attack_member_id is not None and str(attack_member_id) == str(self.identity.member_id):
+            priv = poisoned_update(priv)
+            poisoned = True
+
+        demo = dict(
+            campaign_injected=campaign_injected_now,
+            poisoned=poisoned,
+            epoch=epoch,
+            reset=reset_done,
+        )
+
         if str(rnd.get("status", "open")) not in ("open",):
             return RoundResult(
                 round=round_no, submitted=False, local_recall=local_recall,
                 global_version_before=version_before, global_version_after=version_before,
                 update_norm=float(np.linalg.norm(priv)), reason=f"round status {rnd.get('status')}",
+                **demo,
             )
 
         quote = self.attestor.attest()
@@ -138,6 +214,7 @@ class FederationClient:
                     global_version_after=version_before,
                     update_norm=float(np.linalg.norm(priv)),
                     reason="awaiting approval (member not active)",
+                    **demo,
                 )
             raise
         self.status = "active"
@@ -154,6 +231,7 @@ class FederationClient:
             global_version_before=version_before,
             global_version_after=version_after,
             update_norm=float(np.linalg.norm(priv)),
+            **demo,
         )
 
     def pull_global(self) -> tuple[np.ndarray, int]:

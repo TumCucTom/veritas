@@ -36,11 +36,19 @@ class FakePlane:
         self.enroll_count = 0
         self.update_count = 0
         self.last_update_body: dict | None = None  # captured for metric assertions
+        self.last_enroll_body: dict | None = None   # captured for enrol-metadata assertions
+        # ---- demo-control flags advertised in /v1/rounds/current ----------
+        # The real plane piggybacks the demo RACE state on round-info; the fake
+        # exposes the same fields so the node's reactions are testable offline.
+        self.campaign_active = False
+        self.attack_member_id: str | None = None
+        self.epoch = 0
 
     # ---- transport surface (matches node.federation.transport.PlaneTransport) ----
 
     def enroll(self, body: dict[str, Any]) -> dict[str, Any]:
         member_id = body["memberId"]
+        self.last_enroll_body = body
         tenant_id = f"tenant-{member_id}"
         self.members[member_id] = {
             "publicKeyPem": body["publicKeyPem"],
@@ -59,6 +67,10 @@ class FakePlane:
             "status": "open",
             "dpParams": {"maxNorm": self.max_norm, "sigma": self.sigma},
             "minUpdates": self.min_updates,
+            # Demo-control flags (shared contract with the control plane).
+            "campaignActive": self.campaign_active,
+            "attackMemberId": self.attack_member_id,
+            "epoch": self.epoch,
         }
 
     def get_current_model(self) -> dict[str, Any]:

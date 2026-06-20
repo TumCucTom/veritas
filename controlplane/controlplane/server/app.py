@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +42,29 @@ def get_plane() -> ControlPlane:
     return plane
 
 
+# Real federated-GNN mule-graph benchmark for the legacy /state payload. It
+# TRAINS for a few seconds, so compute it ONCE in a background daemon thread at
+# import; until ready the legacy /state omits gnnBenchmark (web shows "GNN
+# pending"). The live `current` block is built per request off the REAL round
+# trajectory inside ControlPlane.demo_state().
+_gnn_benchmark: dict | None = None
+
+
+def _compute_gnn() -> None:
+    global _gnn_benchmark
+    try:
+        from veritas_core.gnn_benchmark import compute_gnn_benchmark
+        _gnn_benchmark = compute_gnn_benchmark(seed=0)
+        # Also stash on the plane so SSE round_complete payloads (built inside
+        # aggregation, without the module global) include gnnBenchmark too.
+        plane.gnn_benchmark = _gnn_benchmark
+    except Exception:  # noqa: BLE001 - keep /state serving without the benchmark
+        _gnn_benchmark = None
+
+
+threading.Thread(target=_compute_gnn, daemon=True).start()
+
+
 # ---------------------------------------------------------------------------
 # Auth dependencies
 # ---------------------------------------------------------------------------
@@ -64,11 +88,14 @@ def require_member(authorization: str | None = Header(default=None)):
 # ---------------------------------------------------------------------------
 class EnrollBody(BaseModel):
     memberId: str
-    displayName: str
+    # Optional: defaults to memberId (legacy demo metadata).
+    displayName: str | None = None
     publicKeyPem: str
     # Opaque attestation quote: a string (tests/CLI) or the node's structured
     # TEE/software-stub quote dict (Quote.to_wire()). Stored verbatim.
     attestationQuote: dict | str | None = None
+    # Optional legacy demo metadata: customer count surfaced as banks[].customers.
+    customers: int = 0
 
 
 class UpdateBody(BaseModel):
@@ -86,8 +113,9 @@ class UpdateBody(BaseModel):
 @app.post("/v1/members/enroll", status_code=201)
 def enroll(body: EnrollBody):
     try:
-        m = plane.enroll(body.memberId, body.displayName, body.publicKeyPem,
-                         body.attestationQuote)
+        m = plane.enroll(body.memberId, body.displayName or body.memberId,
+                         body.publicKeyPem, body.attestationQuote,
+                         customers=body.customers)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # invalid PEM etc.
@@ -270,3 +298,91 @@ def health():
     return {"ok": True, "round": plane.current_round,
             "modelVersion": plane.promoted_version,
             "members": len(plane.members)}
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-backend demo contract (additive). The web's useVeritas store
+# consumes this shape unchanged; the control plane serves it by aggregating the
+# real enrolled federation members. NEXT_PUBLIC_API_BASE points here (:9000).
+# ---------------------------------------------------------------------------
+class CampaignBody(BaseModel):
+    typology: str | None = None
+
+
+class AttackBody(BaseModel):
+    memberId: str | None = None
+
+
+class PredictBody(BaseModel):
+    transaction: dict | None = None
+
+
+@app.get("/state")
+def demo_state():
+    return plane.demo_state(_gnn_benchmark)
+
+
+@app.get("/banks")
+def demo_banks():
+    return plane.demo_state(_gnn_benchmark)["banks"]
+
+
+@app.post("/campaign/inject")
+def demo_campaign(body: CampaignBody):
+    return plane.demo_inject_campaign(body.typology)
+
+
+@app.post("/attack/inject")
+def demo_attack(body: AttackBody):
+    return plane.demo_inject_attack(body.memberId)
+
+
+@app.post("/round/step")
+def demo_step():
+    return plane.demo_step()
+
+
+@app.post("/sim/reset")
+def demo_reset():
+    plane.demo_reset()
+    return plane.demo_state(_gnn_benchmark)
+
+
+@app.post("/predict")
+def demo_predict(body: PredictBody):
+    return plane.demo_predict(body.transaction)
+
+
+@app.get("/events")
+async def demo_events(request: Request):
+    """Legacy SSE stream the web store subscribes to. Immediately emits the
+    current aggregated State as `round_complete`; thereafter relays the legacy
+    round_complete / client_updated / attack_detected events published on each
+    round aggregation."""
+    queue: asyncio.Queue = asyncio.Queue()
+    plane.subscribe(queue)
+
+    # Only forward the legacy demo events (the control-plane /v1/events stream
+    # carries a different set keyed on contributors/versions).
+    legacy_events = {"round_complete", "client_updated", "attack_detected"}
+
+    async def gen():
+        import json
+        try:
+            yield {"event": "round_complete",
+                   "data": json.dumps(plane.demo_state(_gnn_benchmark))}
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "keepalive"}
+                    continue
+                if msg["event"] not in legacy_events:
+                    continue
+                yield {"event": msg["event"], "data": json.dumps(msg["data"])}
+        finally:
+            plane.unsubscribe(queue)
+
+    return EventSourceResponse(gen())

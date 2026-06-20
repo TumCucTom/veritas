@@ -33,6 +33,14 @@ from .transparency import TransparencyLog
 
 DIM = FEATURE_DIM + 1  # logistic bias term -> 11
 DEFAULT_MIN_UPDATES = 3
+
+# Legacy single-backend demo counter model — REPLICATED from
+# core/veritas_core/engine.py so the control plane serves the exact shape the
+# web's useVeritas store consumes, but driven by REAL member-reported metrics.
+DEMO_AVG_LOSS = 255      # engine.AVG_LOSS
+DEMO_AT_RISK = 1500      # engine.AT_RISK
+DEMO_THRESH = 0.9        # engine.THRESH
+DEMO_HOURS = 1.0         # engine.HOURS
 DP_MAX_NORM = 2.0
 N_BYZANTINE = int(os.environ.get("VERITAS_N_BYZANTINE", "1"))
 
@@ -67,6 +75,10 @@ class Member:
     status: str = "pending"  # pending | active
     attestation_quote: str | None = None
     last_sync: str | None = None
+    # Demo metadata (legacy single-backend contract): customer count surfaced as
+    # banks[].customers, and the most recent reported per-bank detection metrics.
+    customers: int = 0
+    last_metrics: dict = field(default_factory=dict)
 
     def public(self) -> dict:
         return {
@@ -74,6 +86,7 @@ class Member:
             "displayName": self.display_name,
             "tenantId": self.tenant_id,
             "status": self.status,
+            "customers": self.customers,
         }
 
 
@@ -189,6 +202,16 @@ class ControlPlane:
         # SSE subscriber queues (asyncio.Queue) keyed by id.
         self._subscribers: list = []
 
+        # Legacy single-backend demo state. campaign/attack flags drive the
+        # banks[] poisoned markers + counters; epoch bumps on /sim/reset so nodes
+        # re-genesis. Cumulative victim/loss totals accrue per aggregated round
+        # from the MEAN reported detection across active banks (engine.cum).
+        self.campaign_active = False
+        self.attack_active = False
+        self.attack_member_id: str | None = None
+        self.epoch = 0
+        self._demo_cum = {"fed": 0.0, "silo": 0.0}
+
         # Load prior state from the DB, or seed genesis on a fresh store.
         loaded = self.store.load_all()
         if loaded["models"]:
@@ -225,7 +248,8 @@ class ControlPlane:
                 member_id=row["member_id"], display_name=row["display_name"],
                 tenant_id=row["tenant_id"], public_key_pem=row["public_key_pem"],
                 status=row["status"], attestation_quote=row["attestation_quote"],
-                last_sync=row["last_sync"])
+                last_sync=row["last_sync"],
+                customers=int(row.get("customers") or 0))
         for row in loaded["models"]:
             self.models[row["version"]] = Model(
                 version=row["version"], weights=row["weights"],
@@ -268,7 +292,8 @@ class ControlPlane:
         return f"tenant-{member_id}"
 
     def enroll(self, member_id: str, display_name: str, public_key_pem: str,
-               attestation_quote: str | None = None) -> Member:
+               attestation_quote: str | None = None,
+               customers: int = 0) -> Member:
         with self._lock:
             if member_id in self.members:
                 raise ValueError("member already enrolled")
@@ -281,6 +306,7 @@ class ControlPlane:
                 public_key_pem=public_key_pem,
                 status="pending",
                 attestation_quote=attestation_quote,
+                customers=int(customers or 0),
             )
             self.members[member_id] = m
             self.store.persist_member(m)
@@ -335,6 +361,12 @@ class ControlPlane:
                     "delta": self.dp_delta,
                 },
                 "minUpdates": self.min_updates,
+                # Legacy demo flags so nodes react via their poll loop (NO push):
+                # nodes inject the campaign / poison their own update / re-genesis
+                # on epoch change based on these.
+                "campaignActive": self.campaign_active,
+                "attackMemberId": self.attack_member_id,
+                "epoch": self.epoch,
             }
 
     def privacy_state(self) -> dict:
@@ -372,11 +404,17 @@ class ControlPlane:
                 raise ValueError(f"update must have dim {DIM}, got {len(update)}")
             self._receipt_counter += 1
             receipt_id = f"r{round_}-{member_id}-{self._receipt_counter}"
+            metrics = dict(local_metrics or {})
             self.updates.setdefault(round_, {})[member_id] = Update(
                 member_id=member_id, round=round_, update=list(map(float, update)),
-                num_examples=int(num_examples), local_metrics=dict(local_metrics or {}),
+                num_examples=int(num_examples), local_metrics=metrics,
                 attestation_quote=attestation_quote, receipt_id=receipt_id,
             )
+            # Remember the member's latest reported detection metrics so the
+            # legacy banks[] view shows the real per-bank federated/siloed recall.
+            m = self.members.get(member_id)
+            if m is not None:
+                m.last_metrics = metrics
             ready = len(self.updates[round_]) >= self.min_updates
             return {"accepted": True, "receiptId": receipt_id, "_ready": ready}
 
@@ -551,6 +589,15 @@ class ControlPlane:
                        "globalRecall": global_recall,
                        "transparencySeq": entry["seq"]})
 
+        # Legacy demo accrual + SSE: increment cumulative victim/loss counters
+        # off the mean reported detection across banks, and emit the legacy
+        # round_complete / client_updated / attack_detected stream the web store
+        # consumes. Done before opening the next round so banks[] reflect THIS
+        # round's reported metrics.
+        demo_banks = self._demo_banks()
+        self._accrue_demo_counters(demo_banks)
+        self._publish_demo_round(demo_banks, rejected)
+
         self._open_next_round(r)
         return result
 
@@ -690,6 +737,194 @@ class ControlPlane:
                     "globalRecall": res.global_metrics.get("recall", 0.0),
                 })
             return out
+
+    # -- legacy single-backend demo contract ------------------------------
+    # The web's useVeritas store consumes the original single-backend shape.
+    # These methods serve that EXACT shape, backed by aggregating the real
+    # enrolled federation members (per-bank detection from each member's latest
+    # reported localMetrics; counters REPLICATED from engine.py off the mean).
+    def _active_members(self) -> list[Member]:
+        return [m for m in self.members.values() if m.status == "active"]
+
+    def _latest_rejected(self) -> list[str]:
+        """Members rejected in the most recent aggregated round."""
+        if not self.results:
+            return []
+        last = self.results[max(self.results)]
+        return list(last.rejected)
+
+    def _demo_banks(self) -> list[dict]:
+        rejected = set(self._latest_rejected())
+        banks = []
+        for m in sorted(self._active_members(), key=lambda x: x.member_id):
+            metrics = m.last_metrics or {}
+            fed = float(metrics.get("recall", 0.0) or 0.0)
+            silo = float(metrics.get("siloRecall", 0.0) or 0.0)
+            banks.append({
+                "id": m.member_id,
+                "name": m.display_name or m.member_id,
+                "customers": int(m.customers or 0),
+                "detection": {"federated": round(fed, 3), "siloed": round(silo, 3)},
+                "poisoned": m.member_id in rejected,
+            })
+        return banks
+
+    def _accrue_demo_counters(self, banks: list[dict]) -> None:
+        """Increment cumulative victim/loss totals from the MEAN detection across
+        active banks — the control-plane analogue of engine.cum, accrued once per
+        aggregated round."""
+        if not banks:
+            return
+        n = len(banks)
+        fed_mean = sum(b["detection"]["federated"] for b in banks) / n
+        silo_mean = sum(b["detection"]["siloed"] for b in banks) / n
+        self._demo_cum["fed"] += DEMO_AT_RISK * (1 - fed_mean)
+        self._demo_cum["silo"] += DEMO_AT_RISK * (1 - silo_mean)
+
+    def _demo_counters(self, banks: list[dict]) -> dict:
+        n = max(1, len(banks))
+        fed_mean = sum(b["detection"]["federated"] for b in banks) / n
+        silo_mean = sum(b["detection"]["siloed"] for b in banks) / n
+        fv = int(self._demo_cum["fed"])
+        sv = int(self._demo_cum["silo"])
+
+        def ttd(mean: float) -> float:
+            return DEMO_HOURS * self.current_round if mean >= DEMO_THRESH else 101.0
+
+        return {
+            "federated": {
+                "fraudPreventedGbp": max(0, sv - fv) * DEMO_AVG_LOSS,
+                "timeToDetectHours": ttd(fed_mean),
+                "victims": fv,
+                "lostGbp": fv * DEMO_AVG_LOSS,
+            },
+            "siloed": {
+                "fraudPreventedGbp": 0,
+                "timeToDetectHours": ttd(silo_mean),
+                "victims": sv,
+                "lostGbp": sv * DEMO_AVG_LOSS,
+            },
+        }
+
+    def demo_state(self, gnn_benchmark: dict | None = None) -> dict:
+        """The legacy single-backend State shape (GET /state)."""
+        # Fall back to the benchmark stored on the plane so SSE round_complete
+        # payloads (published from inside aggregation, with no caller arg) carry
+        # gnnBenchmark too — otherwise the web's store, overwritten by each round
+        # event, would blank the GNN panel after the first round.
+        if gnn_benchmark is None:
+            gnn_benchmark = getattr(self, "gnn_benchmark", None)
+        with self._lock:
+            banks = self._demo_banks()
+            state = {
+                "round": self.current_round,
+                "running": True,
+                "banks": banks,
+                "counters": self._demo_counters(banks),
+                "campaignActive": self.campaign_active,
+                "attackActive": self.attack_active,
+                "customerRecordsTransmitted": 0,
+            }
+            if gnn_benchmark is not None:
+                b = dict(gnn_benchmark)
+                from veritas_core.gnn_benchmark import benchmark_current
+                b["current"] = benchmark_current(
+                    gnn_benchmark, self.current_round, self.campaign_active)
+                state["gnnBenchmark"] = b
+            return state
+
+    def demo_step(self) -> dict:
+        """Advance ONE federation round for the demo: aggregate the current
+        round's submitted updates (reuse _aggregate_round) and auto-promote the
+        new canary so the served global model advances. Counter accrual + legacy
+        SSE happen inside _aggregate_round. If no updates yet, still open the next
+        round so nodes can submit. Returns the legacy State."""
+        with self._lock:
+            r = self.current_round
+            if self.updates.get(r):
+                result = self._aggregate_round(r)
+                # Auto-promote the freshly-minted canary so /predict and banks[]
+                # advance for the demo (no manual governance step needed).
+                if result is not None:
+                    self.promote(result.new_version)
+            else:
+                self._open_next_round(r)
+            return self.demo_state()
+
+    def demo_inject_campaign(self, typology: str | None = None) -> dict:
+        with self._lock:
+            self.campaign_active = True
+            return {"ok": True}
+
+    def demo_inject_attack(self, member_id: str | None) -> dict:
+        with self._lock:
+            self.attack_member_id = member_id
+            self.attack_active = True
+            return {"ok": True}
+
+    def demo_reset(self) -> None:
+        """Reset the demo: round=1, clear flags + cumulative counters, re-genesis
+        the global model, and bump the epoch so nodes re-genesis too."""
+        with self._lock:
+            self.campaign_active = False
+            self.attack_active = False
+            self.attack_member_id = None
+            self.epoch += 1
+            self._demo_cum = {"fed": 0.0, "silo": 0.0}
+            self.current_round = 1
+            self.round_status = "open"
+            self.updates = {1: {}}
+            self.results = {}
+            self._round_silo_recall = {}
+            # Re-genesis the served global model so detection restarts from scratch.
+            genesis = Model(
+                version=0,
+                weights=[float(x) for x in init_weights(FEATURE_DIM)],
+                parent_version=None,
+                status="promoted",
+                metrics={"recall": 0.0},
+            )
+            self.models = {0: genesis}
+            self.promoted_version = 0
+            self._next_version = 1
+            for m in self.members.values():
+                m.last_metrics = {}
+            self.store.persist_model(genesis)
+            self.store.persist_meta("plane", self._meta_snapshot())
+
+    def demo_predict(self, transaction: dict | None) -> dict:
+        """Score a transaction with the plane's CURRENT global model. Mirrors the
+        feature row core/server/app.py builds for the campaign-signature mule."""
+        with self._lock:
+            txn = transaction or {}
+            sig = float(txn.get("campaignSignature", 1.0))
+            x = np.zeros((1, FEATURE_DIM))
+            x[0, -1] = 1.5 * sig
+            x[0, 0] = -0.5
+            x[0, 6] = -0.5
+            x[0, 7] = -0.5
+            x[0, 5] = -2.0
+            w = np.asarray(self.current_model().weights, dtype=float)
+            from veritas_core.model import predict_proba
+            p = float(predict_proba(w, x)[0])
+            return {
+                "label": "fraud" if p >= 0.5 else "legitimate",
+                "confidence": round(p, 3),
+                "indicators": [
+                    "new account",
+                    "high-velocity fan-out to multiple recipients",
+                    "matches active campaign signature",
+                ],
+            }
+
+    def _publish_demo_round(self, banks: list[dict], rejected: list[str]) -> None:
+        """Emit the legacy SSE events the web store subscribes to (on /events)."""
+        self._publish("round_complete", self.demo_state())
+        for b in banks:
+            self._publish("client_updated",
+                          {"bankId": b["id"], "detection": b["detection"]})
+        for mid in rejected:
+            self._publish("attack_detected", {"bankId": mid, "rejected": True})
 
     # -- SSE --------------------------------------------------------------
     def subscribe(self, queue) -> None:
