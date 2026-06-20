@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from controlplane.state import DIM
+
 from controlplane import crypto
 
 
@@ -165,9 +167,9 @@ def test_events_emit_round_complete_with_state(plane):
         plane.enroll(mid, mid, pub, customers=1000)
         plane.approve(mid)
 
-    base = np.random.default_rng(3).normal(0, 0.02, size=11)
+    base = np.random.default_rng(3).normal(0, 0.02, size=DIM)
     for i, mid in enumerate(["n0", "n1", "n2"]):
-        jitter = np.random.default_rng(30 + i).normal(0, 0.004, size=11)
+        jitter = np.random.default_rng(30 + i).normal(0, 0.004, size=DIM)
         plane.submit_update(mid, 1, list(base + jitter), 1000,
                             {"recall": 0.9, "siloRecall": 0.5})
     plane.demo_step()  # aggregate + auto-promote

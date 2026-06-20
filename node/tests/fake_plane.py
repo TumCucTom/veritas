@@ -15,19 +15,19 @@ from typing import Any
 import numpy as np
 
 from veritas_core.aggregation import multi_krum
-from veritas_core.data import FEATURE_DIM
-from veritas_core.model import init_weights
+from veritas_core import live_ensemble
 
 from node.identity import NodeIdentity
 
 
 class FakePlane:
     def __init__(self, *, min_updates: int = 1, max_norm: float = 2.0, sigma: float = 0.05):
-        self.dim = FEATURE_DIM + 1
+        # The live federated/siloed model is the packed LiveEnsemble (dim 617).
+        self.dim = live_ensemble.weight_dim()
         self.members: dict[str, dict] = {}        # memberId -> {publicKeyPem, tenantId, status}
         self.round = 1
         self.global_version = 0
-        self.global_w = init_weights(FEATURE_DIM)
+        self.global_w = live_ensemble.init_weights(seed=0)
         self.min_updates = min_updates
         self.max_norm = max_norm
         self.sigma = sigma

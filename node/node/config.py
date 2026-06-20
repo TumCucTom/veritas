@@ -23,6 +23,21 @@ SIGMA = 0.05
 EPOCHS = 8
 LR = 0.3
 
+# PER-BLOCK DP clip budgets for the packed LiveEnsemble delta (dim 617). The
+# packed vector is HETEROGENEOUS in scale/dimensionality: the embedding and MLP
+# blocks have hundreds of params (large L2), while the logistic and meta blocks
+# have ~11 and 4 (tiny L2). A single GLOBAL clip would be set by — and crush —
+# the big blocks, zeroing the small ones. So we clip EACH block to its own
+# generous norm (via live_ensemble.clip_blocks) before adding Gaussian noise:
+# the budgets are loose enough to preserve utility at the demo's weak-privacy
+# sigma, yet still bound an amplification attack per block.
+PER_BLOCK_NORM = {
+    "logistic": 3.0,
+    "mlp": 6.0,
+    "embeddings": 8.0,
+    "meta": 3.0,
+}
+
 
 @dataclass
 class NodeConfig:

@@ -5,7 +5,7 @@ No live control plane, no network.
 """
 import numpy as np
 
-from veritas_core.data import make_bank_data
+from veritas_core.live_ensemble import make_live_data
 
 from node.attestation import SoftwareAttestor
 from node.federation import FederationClient
@@ -33,10 +33,10 @@ def test_enroll_registers_public_key():
 def test_full_round_submits_dp_update_and_pulls_new_model():
     plane = FakePlane(min_updates=1, sigma=0.0)  # sigma=0 -> deterministic check
     client = _client(plane)
-    X, y = make_bank_data(2000, 0.05, seed=3)
+    data, y = make_live_data(2000, 0.05, seed=3)
 
     v_before = plane.global_version
-    result = client.run_round(X, y)
+    result = client.run_round(data, y)
 
     assert result.submitted is True
     assert plane.enroll_count == 1          # enrolled exactly once
@@ -64,9 +64,9 @@ def test_jwt_is_verified_against_registered_key():
 def test_two_rounds_advance_version():
     plane = FakePlane(min_updates=1, sigma=0.0)
     client = _client(plane)
-    X, y = make_bank_data(1500, 0.05, seed=5)
-    r1 = client.run_round(X, y)
-    r2 = client.run_round(X, y)
+    data, y = make_live_data(1500, 0.05, seed=5)
+    r1 = client.run_round(data, y)
+    r2 = client.run_round(data, y)
     assert r2.round == r1.round + 1
     assert plane.global_version == 2
     assert plane.enroll_count == 1          # still only enrolled once
@@ -83,10 +83,10 @@ def test_node_consumes_plane_calibrated_sigma():
     # The client reads dpParams.sigma and feeds it to privatize(...): with a
     # larger sigma the DP noise (hence update norm) is meaningfully larger than
     # under the hardcoded fallback for the same training delta.
-    X, y = make_bank_data(1500, 0.05, seed=11)
-    big = _client(plane).run_round(X, y)
+    data, y = make_live_data(1500, 0.05, seed=11)
+    big = _client(plane).run_round(data, y)
     plane_lo = FakePlane(min_updates=1, sigma=0.0)  # no noise baseline
-    small = _client(plane_lo).run_round(X, y)
+    small = _client(plane_lo).run_round(data, y)
     assert big.update_norm > small.update_norm
 
 

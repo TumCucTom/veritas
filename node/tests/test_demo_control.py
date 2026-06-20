@@ -8,12 +8,17 @@ exercise every reaction against the in-memory fake plane (no network).
 """
 import numpy as np
 
-from veritas_core.data import make_bank_data
-
 from node.config import NodeConfig
+from node.engine import NodeEngine
 from node.runtime import NodeRuntime
 
 from .fake_plane import FakePlane
+
+
+def _pristine_eval_y(seed: int) -> np.ndarray:
+    """The engine's pristine (campaign-free) eval labels for a given seed — the
+    same multi-view sample NodeEngine builds in __init__/reset_genesis."""
+    return NodeEngine._make_eval(NodeEngine.__new__(NodeEngine), seed)[1]
 
 
 # ---- enrol metadata -------------------------------------------------------
@@ -171,7 +176,7 @@ def test_epoch_bump_resets_local_state_to_genesis():
     for _ in range(3):
         rt.federate_once()
     assert rt.engine.campaign_active is True
-    assert rt.engine.eval_y.sum() > make_bank_data(1000, 0.05, seed=cfg.seed + 100)[1].sum()
+    assert rt.engine.eval_y.sum() > _pristine_eval_y(cfg.seed).sum()
 
     # Plane bumps the epoch (reset beat) and clears the campaign for the re-run.
     plane.epoch = 1
@@ -183,7 +188,7 @@ def test_epoch_bump_resets_local_state_to_genesis():
     assert rt.engine.campaign_active is False
     assert rt.client._campaign_injected_epoch is None
     # Eval set is back to the pristine (campaign-free) baseline.
-    pristine_X, pristine_y = make_bank_data(1000, 0.05, seed=cfg.seed + 100)
+    pristine_y = _pristine_eval_y(cfg.seed)
     assert np.array_equal(rt.engine.eval_y, pristine_y)
     # Counters reflect at most the single post-reset round, not the prior run's
     # accumulation (which over 3 campaign rounds was far larger).

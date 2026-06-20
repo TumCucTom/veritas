@@ -178,7 +178,7 @@ def edge_cohort_close(_body: CohortCloseBody | None = None) -> dict:
 @app.post("/edge/v1/score")
 def edge_score(body: EdgeScoreBody) -> dict:
     x = np.asarray(body.features, dtype=np.float64)
-    label, conf = runtime.engine.predict(x, weights=runtime.engine.edge_w)
+    label, conf = runtime.engine.predict(x, weights=runtime.engine.edge_w, edge=True)
     indicators = ["scam-in-progress signal"] if conf >= 0.5 else []
     return {"label": label, "confidence": round(conf, 3), "indicators": indicators}
 

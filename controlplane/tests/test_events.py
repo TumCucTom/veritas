@@ -8,6 +8,8 @@ import asyncio
 
 import numpy as np
 
+from controlplane.state import DIM
+
 
 def test_named_events_fire(plane):
     from controlplane import crypto
@@ -23,9 +25,9 @@ def test_named_events_fire(plane):
         plane.approve(mid)
         members[mid] = priv
 
-    base = np.random.default_rng(3).normal(0, 0.05, size=11)
+    base = np.random.default_rng(3).normal(0, 0.05, size=DIM)
     for i, mid in enumerate(["n0", "n1", "n2"]):
-        jitter = np.random.default_rng(30 + i).normal(0, 0.01, size=11)
+        jitter = np.random.default_rng(30 + i).normal(0, 0.01, size=DIM)
         plane.submit_update(mid, 1, list(base + jitter), 1000, {"recall": 0.8})
     plane.maybe_aggregate(1)            # -> round_complete
     plane.promote(1)                    # -> model_promoted
@@ -49,10 +51,10 @@ def test_attack_detected_event_fires(plane):
         plane.enroll(mid, mid, pub)
         plane.approve(mid)
 
-    base = np.random.default_rng(1).normal(0, 0.02, size=11)
+    base = np.random.default_rng(1).normal(0, 0.02, size=DIM)
     for i, mid in enumerate(["n0", "n1", "n2"]):
         plane.submit_update(mid, 1, list(base + np.random.default_rng(10 + i)
-                            .normal(0, 0.004, size=11)), 1000, {"recall": 0.83})
+                            .normal(0, 0.004, size=DIM)), 1000, {"recall": 0.83})
     plane.submit_update("evil", 1, list(-base * 50.0), 1000, {"recall": 0.0})
     plane.advance_round()
 

@@ -24,14 +24,17 @@ import numpy as np
 # reimplemented here.
 from veritas_core.data import FEATURE_DIM
 from veritas_core.dp_accountant import RDPAccountant, calibrate_noise_multiplier
-from veritas_core.model import init_weights
+from veritas_core import live_ensemble
 from veritas_core.robust import robust_aggregate
 
 from . import crypto
 from .store import Store
 from .transparency import TransparencyLog
 
-DIM = FEATURE_DIM + 1  # logistic bias term -> 11
+# The LIVE federated/siloed model is now the stacked LiveEnsemble (packed as a
+# single flat vector). The node<->plane contract is UNCHANGED — one weight
+# vector per round — only its dimension grows 11 -> 617 (the packed ensemble).
+DIM = live_ensemble.weight_dim()  # packed [logistic|mlp|embeddings|meta] -> 617
 DEFAULT_MIN_UPDATES = 3
 
 # Legacy single-backend demo counter model — REPLICATED from
@@ -223,7 +226,7 @@ class ControlPlane:
     def _seed_genesis(self) -> None:
         genesis = Model(
             version=0,
-            weights=[float(x) for x in init_weights(FEATURE_DIM)],
+            weights=[float(x) for x in live_ensemble.init_weights()],
             parent_version=None,
             status="promoted",
             metrics={"recall": 0.0},
@@ -504,8 +507,15 @@ class ControlPlane:
         if len(survivors) == 1:
             agg = survivors[0]
         else:
+            # AGGREGATE-step clip is DISABLED (max_norm=None) for the packed
+            # ensemble: a single global L2 clip on the 617-vector is dominated by
+            # the large embedding/MLP blocks and would crush the small logistic /
+            # meta blocks (the heterogeneous-scale problem live_ensemble.clip_blocks
+            # solves). The node already applies PER-BLOCK DP clipping client-side
+            # before noising, so amplification attacks are bounded per block there;
+            # detection (Krum on RAW deltas, below) still NAMES a loud poisoner.
             agg, _ = robust_aggregate(survivors, method=self.agg_method,
-                                      n_byzantine=0, max_norm=DP_MAX_NORM)
+                                      n_byzantine=0, max_norm=None)
 
         contributors = [member_ids[i] for i in selected]
         rejected = [member_ids[i] for i in rejected_idx]
@@ -879,7 +889,7 @@ class ControlPlane:
             # Re-genesis the served global model so detection restarts from scratch.
             genesis = Model(
                 version=0,
-                weights=[float(x) for x in init_weights(FEATURE_DIM)],
+                weights=[float(x) for x in live_ensemble.init_weights()],
                 parent_version=None,
                 status="promoted",
                 metrics={"recall": 0.0},
@@ -893,20 +903,22 @@ class ControlPlane:
             self.store.persist_meta("plane", self._meta_snapshot())
 
     def demo_predict(self, transaction: dict | None) -> dict:
-        """Score a transaction with the plane's CURRENT global model. Mirrors the
-        feature row core/server/app.py builds for the campaign-signature mule."""
+        """Score a transaction with the plane's CURRENT global model (the packed
+        LiveEnsemble). Mirrors the feature row built for the campaign-signature
+        mule: benign on the generic fraud axes, strong campaign signature."""
         with self._lock:
             txn = transaction or {}
             sig = float(txn.get("campaignSignature", 1.0))
-            x = np.zeros((1, FEATURE_DIM))
-            x[0, -1] = 1.5 * sig
-            x[0, 0] = -0.5
-            x[0, 6] = -0.5
-            x[0, 7] = -0.5
-            x[0, 5] = -2.0
+            x = np.zeros(FEATURE_DIM)
+            x[-1] = 1.5 * sig
+            x[0] = -0.5
+            x[6] = -0.5
+            x[7] = -0.5
+            x[5] = -2.0
             w = np.asarray(self.current_model().weights, dtype=float)
-            from veritas_core.model import predict_proba
-            p = float(predict_proba(w, x)[0])
+            # predict_one on the packed ensemble: a bare FEATURE_DIM row scores
+            # with a neutral categorical view (the campaign typology is tabular).
+            p = float(live_ensemble.predict_one(w, x))
             return {
                 "label": "fraud" if p >= 0.5 else "legitimate",
                 "confidence": round(p, 3),

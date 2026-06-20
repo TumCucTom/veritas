@@ -3,6 +3,8 @@ version -> round_aggregated transparency record. Plus poisoned-update rejection
 firing attack_detected and listing the member as rejected."""
 import numpy as np
 
+from controlplane.state import DIM
+
 
 def test_full_honest_round_creates_new_version(client, make_member, honest_delta,
                                                admin_headers):
@@ -28,7 +30,7 @@ def test_full_honest_round_creates_new_version(client, make_member, honest_delta
     # New model is registered and applied (delta added to genesis zero model).
     model = client.get("/v1/models/1").json()
     assert model["version"] == 1 and model["parentVersion"] == 0
-    assert model["dim"] == len(model["weights"]) == 11
+    assert model["dim"] == len(model["weights"]) == DIM
     assert np.linalg.norm(model["weights"]) > 0
 
     # A round_aggregated record landed in the transparency log.
@@ -94,9 +96,9 @@ def test_poisoned_rejection_fires_and_lists_member(plane):
         plane.approve(mid)
         members[mid] = priv
 
-    base = np.random.default_rng(1).normal(0, 0.02, size=11)
+    base = np.random.default_rng(1).normal(0, 0.02, size=DIM)
     for i, mid in enumerate(["n0", "n1", "n2"]):
-        jitter = np.random.default_rng(10 + i).normal(0, 0.004, size=11)
+        jitter = np.random.default_rng(10 + i).normal(0, 0.004, size=DIM)
         plane.submit_update(mid, 1, list(base + jitter), 1000, {"recall": 0.83})
     plane.submit_update("evil", 1, list(-base * 50.0), 1000, {"recall": 0.0})
 

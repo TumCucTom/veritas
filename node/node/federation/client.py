@@ -21,11 +21,11 @@ import httpx
 import numpy as np
 
 from veritas_core.attack import poisoned_update
-from veritas_core.dp import privatize
-from veritas_core.model import recall, train_local
+from veritas_core.dp import add_noise
+from veritas_core import live_ensemble
 
 from ..attestation import Attestor
-from ..config import EPOCHS, LR, MAX_NORM, SIGMA
+from ..config import EPOCHS, LR, MAX_NORM, SIGMA, PER_BLOCK_NORM
 from ..identity import NodeIdentity
 from .transport import PlaneTransport
 
@@ -108,7 +108,7 @@ class FederationClient:
     # ---- one round -------------------------------------------------------
 
     def run_round(
-        self, X: np.ndarray, y: np.ndarray, *, silo_recall: float | None = None
+        self, data, y: np.ndarray, *, silo_recall: float | None = None
     ) -> RoundResult:
         if not self.enrolled:
             self.enroll()
@@ -151,11 +151,20 @@ class FederationClient:
         global_w = np.asarray(model["weights"], dtype=np.float64)
         version_before = int(model.get("version", 0))
 
-        # Local training (reuse core), then the delta the plane aggregates.
-        local_w = train_local(global_w, X, y, epochs=EPOCHS, lr=LR)
+        # Local training on the packed LiveEnsemble, then the delta the plane
+        # aggregates (a single 617-vector — the contract is unchanged, only the
+        # dimension grew). DP is PER-BLOCK: a single global clip on the packed
+        # delta would be dominated by the large embedding/MLP blocks and crush
+        # the small logistic/meta blocks, so we clip EACH block to its own norm
+        # budget (live_ensemble.clip_blocks) BEFORE adding Gaussian noise.
+        local_w = live_ensemble.train_local(global_w, data, y, epochs=EPOCHS, lr=LR)
         update = local_w - global_w
-        priv = privatize(update, max_norm, sigma, self.rng)
-        local_recall = recall(local_w, X, y)
+        clipped = live_ensemble.clip_blocks(update, PER_BLOCK_NORM)
+        # Reuse the core Gaussian mechanism. The noise scale is sigma * max_norm;
+        # we drive it off the plane-advertised max_norm so the demo's weak-privacy
+        # operating point (sigma~0.1) still preserves utility on every block.
+        priv = add_noise(clipped, sigma, max_norm, self.rng)
+        local_recall = live_ensemble.recall(local_w, data, y)
 
         # ATTACK: if the plane has designated ME as the attacker this round,
         # poison my (already DP-clipped) update — sign-flip + amplify (reused

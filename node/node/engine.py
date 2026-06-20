@@ -3,15 +3,20 @@
 This is the split-out of ``core/veritas_core/engine.py`` (which simulated N
 banks in one process) down to ONE bank. It holds:
 
-  * ``global_w``  — the federated global model (synced from the control plane).
-  * ``silo_w``    — the SILOED baseline: trained ONLY on this bank's local data,
-                    sharing off. This is the honest federated-vs-siloed
-                    counterfactual surfaced in /state and the console.
-  * ``edge_w``    — the bank edge model that Tier-0 device updates aggregate into.
+  * ``global_w``  — the federated global model (synced from the control plane),
+                    a packed ``live_ensemble`` vector (dim 617).
+  * ``silo_w``    — the SILOED baseline: the SAME LiveEnsemble trained ONLY on
+                    this bank's local data, sharing off. This is the honest
+                    federated-vs-siloed counterfactual surfaced in /state.
+  * ``edge_w``    — the bank EDGE model (Tier-0 device updates aggregate into it).
+                    KEPT as the flat logistic (dim 11) — the TypeScript edge SDK
+                    sends dim-11 updates, so the device path is unchanged.
 
-Local data comes from the connector runtime (config-driven) and falls back to
-the synthetic ``make_bank_data`` generator when no real source is wired, so the
-node is runnable and testable standalone. All FL math is reused from core.
+Local MULTI-VIEW data (``LiveData``: tabular X + categorical X_cat) comes from
+the connector runtime (config-driven, lifted into a neutral categorical view)
+and falls back to the synthetic ``live_ensemble.make_live_data`` generator when
+no real source is wired, so the node is runnable and testable standalone. All
+FL math is reused from core.
 """
 from __future__ import annotations
 
@@ -20,9 +25,13 @@ import uuid
 
 import numpy as np
 
-from veritas_core.data import FEATURE_DIM, inject_campaign, make_bank_data
+from veritas_core.data import FEATURE_DIM
 from veritas_core.gnn_benchmark import benchmark_current, compute_gnn_benchmark
-from veritas_core.model import init_weights, predict_proba, recall, train_local
+from veritas_core import live_ensemble
+from veritas_core.live_ensemble import LiveData
+# Edge (Tier-0) model stays the flat logistic (dim FEATURE_DIM+1==11): the
+# TypeScript edge SDK sends dim-11 updates, so the device path is unchanged.
+from veritas_core.model import init_weights as edge_init_weights
 from veritas_core.secure_agg import (
     establish_pairwise_seeds,
     recover_dropout,
@@ -52,17 +61,32 @@ class NodeEngine:
         self.name = NAMES[i % len(NAMES)]
         self.customers = CUST[i % len(CUST)]
 
-        # Local training data: prefer the connector (config-driven); else synth.
-        if connector_data is not None and len(connector_data[1]) > 0:
-            self.train_X, self.train_y = connector_data
+        # Local MULTI-VIEW training data (LiveData: tabular X + categorical X_cat)
+        # for the stacked LiveEnsemble. Prefer the connector (config-driven); the
+        # connector yields a flat (X, y) tabular view, which we lift into a
+        # LiveData with a neutral categorical view (its fraud typology is tabular).
+        # When no connector is wired we synthesise the heterogeneous multi-view
+        # sample so the ensemble's categorical/XOR typologies are present too.
+        # A designated BLIND node must train on campaign-FREE data so its siloed
+        # baseline can never learn the new typology (only the federated model,
+        # via seeing peers, can) — mirrors the live deploy, where the blind node
+        # is pointed at a nonexistent feature map to force the synthetic
+        # campaign-free fallback. So we ignore connector data for a blind node,
+        # whose sample set may itself carry campaign-signature rows.
+        is_blind = cfg.blind_node is not None and cfg.blind_node == cfg.node_index
+        if connector_data is not None and len(connector_data[1]) > 0 and not is_blind:
+            X, y = connector_data
+            self.train_data, self.train_y = self._wrap_tabular(X), y
         else:
-            self.train_X, self.train_y = make_bank_data(3000, 0.03, seed=cfg.seed)
+            self.train_data, self.train_y = self._make_train(cfg.seed)
         # Held-out eval set for the recall counterfactual.
-        self.eval_X, self.eval_y = make_bank_data(1000, 0.05, seed=cfg.seed + 100)
+        self.eval_data, self.eval_y = self._make_eval(cfg.seed)
 
-        self.global_w = init_weights(FEATURE_DIM)   # federated (synced from plane)
-        self.silo_w = init_weights(FEATURE_DIM)     # siloed baseline (local only)
-        self.edge_w = init_weights(FEATURE_DIM)     # bank edge model (device→bank)
+        # Federated + siloed models are the packed LiveEnsemble (dim 617). The
+        # edge model stays the flat logistic (dim 11) — the device SDK contract.
+        self.global_w = live_ensemble.init_weights(seed=cfg.seed)   # federated
+        self.silo_w = live_ensemble.init_weights(seed=cfg.seed)     # siloed
+        self.edge_w = edge_init_weights(FEATURE_DIM)                 # edge (device→bank)
 
         self.global_version = 0
         self.round = 0
@@ -92,6 +116,63 @@ class NodeEngine:
         self._gnn_benchmark: dict | None = None
         threading.Thread(target=self._compute_gnn_benchmark, daemon=True).start()
 
+    # ---- multi-view data builders (LiveData for the ensemble) ------------
+
+    # Sizes kept modest so the heavier ensemble train_local stays snappy per
+    # round in the live demo (the stacked model is far costlier than logistic).
+    _TRAIN_N = 1200
+    _EVAL_N = 600
+
+    @staticmethod
+    def _wrap_tabular(X: np.ndarray) -> LiveData:
+        """Lift a flat (n, FEATURE_DIM) tabular matrix into a LiveData with a
+        neutral categorical view (category 0 everywhere — NOT the mule corridor).
+        """
+        X = np.asarray(X, dtype=np.float64)
+        X_cat = np.zeros((X.shape[0], 3), dtype=np.int64)
+        return LiveData(X=X, X_cat=X_cat)
+
+    def _make_train(self, seed: int, *, inject_campaign: bool = False):
+        return live_ensemble.make_live_data(
+            self._TRAIN_N, fraud_rate=0.03, seed=seed,
+            inject_campaign=inject_campaign)
+
+    def _make_eval(self, seed: int, *, inject_campaign: bool = False):
+        return live_ensemble.make_live_data(
+            self._EVAL_N, fraud_rate=0.05, seed=seed + 100,
+            inject_campaign=inject_campaign)
+
+    @staticmethod
+    def _append_campaign(data: LiveData, y: np.ndarray, n_camp: int, seed: int):
+        """Append a "safe-account mule" campaign block to an existing multi-view
+        sample (mirrors live_ensemble.make_live_data's inject_campaign block).
+
+        Returns (LiveData, y) with ``n_camp`` extra fraud rows that look benign on
+        the generic fraud axes but carry the campaign signature in feature [-1].
+        Appending (rather than regenerating) guarantees STRICTLY more positives
+        for any base — connector-loaded or synthetic — so a "seeing" bank's
+        siloed model gains local campaign examples and a targeted eval set grows.
+        """
+        crng = np.random.default_rng(seed)
+        # Campaign rows must look BENIGN on every axis a campaign-blind siloed
+        # model knows (small noise around 0, the generic-fraud margins OFF), and
+        # carry the campaign typology ONLY in the signature feature [-1]. A model
+        # that never trained on campaign rows leaves feature[-1]'s weight ~0 and
+        # cannot flag them; a FEDERATED model that learned the signature from
+        # seeing peers can. This is the load-bearing siloed-vs-federated lift.
+        Xc = crng.normal(0.0, 0.3, (n_camp, FEATURE_DIM))
+        Xc[:, -1] = 1.5                              # campaign signature ONLY
+        card = live_ensemble.CARD
+        cat_c = np.stack([
+            crng.integers(0, card[0], n_camp),
+            crng.integers(0, card[1], n_camp),
+            crng.integers(0, card[2], n_camp),
+        ], axis=1).astype(np.int64)
+        X = np.vstack([data.X, Xc.astype(np.float64)])
+        X_cat = np.vstack([data.X_cat, cat_c])
+        y = np.concatenate([np.asarray(y), np.ones(n_camp, dtype=np.int64)])
+        return LiveData(X=X, X_cat=X_cat), y
+
     def _compute_gnn_benchmark(self) -> None:
         b = compute_gnn_benchmark(seed=0)
         with self._lock:
@@ -116,11 +197,17 @@ class NodeEngine:
         """
         with self._lock:
             self.campaign_active = True
+            # Append the "safe-account mule" campaign block (make_live_data's
+            # campaign typology) to the existing multi-view data. seeing ->
+            # campaign in BOTH local training and eval (the bank can learn it);
+            # blind -> campaign in EVAL ONLY (targeted but the siloed model never
+            # trains on it, so only the FEDERATED model carries the signature in
+            # from seeing peers). Appending guarantees strictly more positives.
             if seeing:
-                self.train_X, self.train_y = inject_campaign(
-                    self.train_X, self.train_y, 150, seed=1 + self.cfg.node_index)
-            self.eval_X, self.eval_y = inject_campaign(
-                self.eval_X, self.eval_y, 80, seed=200 + self.cfg.node_index)
+                self.train_data, self.train_y = self._append_campaign(
+                    self.train_data, self.train_y, 150, seed=1 + self.cfg.node_index)
+            self.eval_data, self.eval_y = self._append_campaign(
+                self.eval_data, self.eval_y, 80, seed=200 + self.cfg.node_index)
 
     def reset_genesis(self) -> None:
         """Reset local FL state to genesis so the demo RACE can be re-run.
@@ -136,11 +223,11 @@ class NodeEngine:
             # connector reloads would re-fetch upstream, which the live demo
             # resets via a fresh process — here we regenerate the synthetic
             # baseline so re-runs are deterministic and campaign-free).
-            self.train_X, self.train_y = make_bank_data(3000, 0.03, seed=self.cfg.seed)
-            self.eval_X, self.eval_y = make_bank_data(1000, 0.05, seed=self.cfg.seed + 100)
-            self.global_w = init_weights(FEATURE_DIM)
-            self.silo_w = init_weights(FEATURE_DIM)
-            self.edge_w = init_weights(FEATURE_DIM)
+            self.train_data, self.train_y = self._make_train(self.cfg.seed)
+            self.eval_data, self.eval_y = self._make_eval(self.cfg.seed)
+            self.global_w = live_ensemble.init_weights(seed=self.cfg.seed)
+            self.silo_w = live_ensemble.init_weights(seed=self.cfg.seed)
+            self.edge_w = edge_init_weights(FEATURE_DIM)
             self.global_version = 0
             self.round = 0
             self.campaign_active = False
@@ -155,15 +242,16 @@ class NodeEngine:
             self.round = max(self.round, version)
 
     def train_silo_step(self) -> None:
-        """Advance the siloed baseline one local step (sharing off)."""
+        """Advance the siloed ENSEMBLE baseline one local step (sharing off)."""
         with self._lock:
-            self.silo_w = train_local(self.silo_w, self.train_X, self.train_y, epochs=EPOCHS, lr=LR)
+            self.silo_w = live_ensemble.train_local(
+                self.silo_w, self.train_data, self.train_y, epochs=EPOCHS, lr=LR)
 
     # ---- detection / counterfactual --------------------------------------
 
     def _det(self) -> tuple[float, float]:
-        fed = recall(self.global_w, self.eval_X, self.eval_y)
-        silo = recall(self.silo_w, self.eval_X, self.eval_y)
+        fed = live_ensemble.recall(self.global_w, self.eval_data, self.eval_y)
+        silo = live_ensemble.recall(self.silo_w, self.eval_data, self.eval_y)
         return float(fed), float(silo)
 
     def silo_recall(self) -> float:
@@ -174,11 +262,25 @@ class NodeEngine:
         meaningful).
         """
         with self._lock:
-            return float(recall(self.silo_w, self.eval_X, self.eval_y))
+            return float(
+                live_ensemble.recall(self.silo_w, self.eval_data, self.eval_y))
 
-    def predict(self, features: np.ndarray, *, weights: np.ndarray | None = None) -> tuple[str, float]:
-        w = self.global_w if weights is None else weights
-        p = float(predict_proba(w, features.reshape(1, -1))[0])
+    def predict(self, features: np.ndarray, *, weights: np.ndarray | None = None,
+                edge: bool = False) -> tuple[str, float]:
+        """Score one transaction.
+
+        Federated/global predictions run the packed LiveEnsemble via
+        ``predict_one`` (a bare FEATURE_DIM row -> neutral categorical view). The
+        EDGE path keeps the flat logistic (dim 11), so ``edge=True`` scores with
+        ``model.predict_proba`` on ``edge_w``.
+        """
+        if edge or (weights is not None and len(np.asarray(weights)) == self.edge_w.shape[0]):
+            from veritas_core.model import predict_proba as _edge_proba
+            w = self.edge_w if weights is None else weights
+            p = float(_edge_proba(np.asarray(w), np.asarray(features).reshape(1, -1))[0])
+        else:
+            w = self.global_w if weights is None else weights
+            p = float(live_ensemble.predict_one(w, np.asarray(features)))
         return ("fraud" if p >= 0.5 else "legitimate", p)
 
     # ---- edge secure-aggregation (Tier 0 → bank, Bonawitz masked sum) -----
