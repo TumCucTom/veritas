@@ -20,10 +20,13 @@ import:
 
 - :PackageEntrypoint: should be called `src/index.ts`.
 - :Implementation: should include `src/types.ts` for exported TypeScript interfaces, `src/validators.ts` for runtime validation, `src/client.ts` for :VeritasClient:, and `src/fixtures.ts` for :ContractFixtures:.
+- :Implementation: should include `package.json`, `tsconfig.json`, `vitest.config.ts`, and `README.md` so reviewed output can be compiled, tested, and explained before it is copied into Veritas.
 - :VeritasClient: should accept a `baseUrl`, optional `fetch` implementation, and optional headers at construction time.
 - :VeritasClient: should expose `getState`, `getBanks`, `getProvenance`, `predict`, `injectCampaign`, `injectAttack`, `stepRound`, and `resetSimulation` methods.
+- :Implementation: should use the public type name `StateSnapshot`; it should not shorten this contract type to `State`.
 - :Implementation: should treat `customerRecordsTransmitted` as the literal number `0` wherever it appears in public types or fixtures.
 - :Implementation: should preserve backward compatibility with the hackathon contract while allowing additional optional production fields.
+- :Implementation: should not invent legacy monorepo paths. Reviewed TypeScript types belong in `contract/types.ts`; reviewed browser helpers belong under `web/src/lib/`; reviewed edge helpers belong under `edge-sdk/src/`.
 
 ***test reqs***
 
@@ -38,8 +41,17 @@ import:
   ***acceptance tests***
 
   - :PackageEntrypoint: should export `StateSnapshot`, `BankSummary`, `RegimeCounters`, `ProvenanceEntry`, `PredictRequest`, and `PredictResponse`.
+  - `src/types.ts` should define `StateSnapshot` exactly; it should not export a replacement type named only `State`.
   - `StateSnapshot.customerRecordsTransmitted` should be typed so only `0` is accepted by TypeScript.
   - `PredictResponse.confidence` should be represented as a number between `0` and `1` in docs and fixtures.
+
+- Generate runnable TypeScript package scaffolding around the contract client.
+
+  ***acceptance tests***
+
+  - `package.json` should include `test` and `typecheck` scripts that run without contacting Veritas services.
+  - `tsconfig.json` should include strict checking for `src/**/*.ts` and `test/**/*.ts`.
+  - `vitest.config.ts` should configure a Node.js test environment for the generated unit and conformance tests.
 
 - Generate runtime validators for every public contract type.
 
@@ -70,5 +82,6 @@ import:
   ***acceptance tests***
 
   - The generated README should say that reviewed TypeScript types belong in `contract/types.ts` and client helpers belong under `web/src/lib/` or `edge-sdk/src/`.
+  - The generated README should mention only the real Veritas target paths named above; it should not invent extra monorepo target paths.
   - The generated README should warn that Codeplain output must not replace privacy, cryptography, aggregation, or model primitives.
   - The generated README should include the exact command `python3 -m unittest tests.test_codeplain_submission` as a source-artifact guard.

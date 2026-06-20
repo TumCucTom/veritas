@@ -10,9 +10,13 @@
 - :Implementation: should export all public types and helpers from :PackageEntrypoint:.
 - :Implementation: should not perform network calls during module import.
 - :Implementation: should keep runtime validation dependency-free unless a dependency is explicitly generated into package.json.
+- :Implementation: should include `package.json`, `tsconfig.json`, `vitest.config.ts`, and `README.md` so the generated package can be typechecked and tested before integration.
+- `package.json` should include `test` and `typecheck` scripts. The `test` script should run `vitest run`; the `typecheck` script should run `tsc --noEmit`.
+- `tsconfig.json` should enable strict TypeScript checking, target Node.js 20-compatible JavaScript, and include both `src/**/*.ts` and `test/**/*.ts`.
 
 ***test reqs***
 
 - :UnitTests: should be written in TypeScript and should be runnable with either "npm test" or "npx vitest run".
 - :ConformanceTests: should be written in TypeScript and should exercise observable API behavior using fixtures, not live services.
 - :ConformanceTests: must not require customer data, live bank data, or a running Veritas deployment.
+- :ConformanceTests: should be runnable from a clean checkout using the generated `package.json` or `tsconfig.json`.

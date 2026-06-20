@@ -22,6 +22,7 @@ import:
 - :FeatureMap: should support direct field paths, derived window features, literal values, and default values for missing optional fields.
 - :ConnectorRuntime: should expose a `load_rows(source, feature_map)` function that returns a list of :FeatureRow: dictionaries.
 - :WarehouseConnector: should define interfaces and local test doubles only; generated code must not include real bank credentials or cloud account identifiers.
+- :WarehouseConnector: should expose `iter_records()` as the abstract streaming method; generated warehouse adapters and local doubles must not expose `fetch_records()`.
 - :Implementation: should include fixture data that is obviously synthetic and should not resemble real customer records.
 
 ***test reqs***
@@ -30,6 +31,7 @@ import:
 - :ConformanceTests: should prove that generated :FeatureRow: output contains the numeric fields expected by the current Veritas model.
 - :ConformanceTests: should verify that no raw customer record is written outside the generated fixture directory.
 - :ConformanceTests: for each functional requirement should only cover that requirement's connector surface; ISO 20022 behavior belongs to the :Iso20022Connector: functional requirement, not the :FeatureMap: functional requirement.
+- :ConformanceTests: that generate shared connector fixtures should expose a callable named `generate_conformance_fixtures(base_dir)` so the test setup can build CSV, XML, and YAML fixtures deterministically.
 
 ***functional specs***
 
@@ -62,6 +64,7 @@ import:
   ***acceptance tests***
 
   - :WarehouseConnector: should define a common `iter_records()` contract for Snowflake, BigQuery, Databricks, Postgres, and Kafka adapters.
+  - :WarehouseConnector: and offline test doubles must not expose `fetch_records()`.
   - Offline test doubles should be able to emit records without external credentials, sockets, or cloud SDKs.
   - Generated adapters should read credentials from constructor arguments or environment variables and should never hard-code secrets.
 
@@ -70,5 +73,6 @@ import:
   ***acceptance tests***
 
   - :ConnectorFixtures: should include at least one CSV fixture, one ISO 20022 XML fixture, and one YAML feature-map fixture.
+  - :ConnectorFixtures: should expose `generate_conformance_fixtures(base_dir)` that writes the CSV, ISO 20022 XML, and YAML fixtures into `base_dir`.
   - :ConformanceTests: should assert that `load_rows` returns model-ready rows for both CSV and ISO 20022 fixtures.
   - :ConformanceTests: should include a privacy guard proving that returned rows do not contain raw account names, addresses, phone numbers, or full payment narratives.

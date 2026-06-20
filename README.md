@@ -1,5 +1,7 @@
 # Veritas — federated fraud intelligence (FLock.io × UK Sovereign AI)
 - core/ Python FL service · web/ Next.js UI · contract/ shared API · mock/ standalone server
+- Codeplain submission notes: [codeplain/SUBMISSION.md](codeplain/SUBMISSION.md)
+
 ## Run
 1. mock: `cd mock && npm i && npm start`            (:8001)
 2. core: `cd core && pip install -e . && uvicorn server.app:app` (:8000)

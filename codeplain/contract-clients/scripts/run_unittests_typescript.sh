@@ -19,5 +19,6 @@ if [ -f package.json ]; then
 elif [ -f tsconfig.json ]; then
   npx tsc --noEmit
 else
-  find . -type f \( -name '*.ts' -o -name '*.tsx' \) -print | grep -q .
+  echo "generated TypeScript output must include package.json or tsconfig.json" >&2
+  exit 1
 fi
