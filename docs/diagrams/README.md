@@ -1,6 +1,9 @@
 # Veritas Technical Diagrams
 
-Editable Excalidraw source files for the Veritas technical narrative.
+Technical diagram assets for the Veritas narrative.
+
+- `excalidraw/` contains editable Excalidraw source files.
+- `svg/` contains rendered SVG exports with matching numbered filenames.
 
 ## Files
 
@@ -12,4 +15,5 @@ Editable Excalidraw source files for the Veritas technical narrative.
 - `06-threat-and-governance-flow.excalidraw` - Abuse cases, defenses, governance outcomes, and audit artifacts.
 - `07-bank-onboarding-deployment.excalidraw` - Adoption path from sealed-node deployment through shadow mode and go-live.
 
-Open any file in Excalidraw to edit or export PNG/SVG assets.
+Open any file in `excalidraw/` to edit the source. Use the matching SVG in
+`svg/` when embedding a rendered diagram in docs or slides.

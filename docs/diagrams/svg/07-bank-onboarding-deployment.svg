@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1230" height="843" viewBox="10 0 1230 843" role="img" aria-labelledby="title">
+  <title id="title">bank onboarding</title>
+  <defs><marker id="arrow-1d2733" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1d2733" /></marker></defs>
+  <rect x="10" y="0" width="1230" height="843" fill="#ffffff" />
+  <text x="40" y="59.92" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="34" text-anchor="start"><tspan x="40" dy="0">Bank Onboarding and Deployment</tspan></text>
+  <text x="40" y="89.84" fill="#526170" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="18" text-anchor="start"><tspan x="40" dy="0">Config-not-code path from first deployment to live federation membership.</tspan></text>
+  <rect x="60" y="150" width="330" height="150" rx="18" fill="#e9f7ef" stroke="#2ca02c" stroke-width="2" />
+  <text x="76" y="181.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="76" dy="0">1. Deploy sealed node</tspan><tspan x="76" dy="24">Marketplace managed app or OVA</tspan><tspan x="76" dy="24">Bank infra owns tenancy</tspan></text>
+  <rect x="470" y="150" width="330" height="150" rx="18" fill="#e9f7ef" stroke="#2ca02c" stroke-width="2" />
+  <text x="486" y="181.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="486" dy="0">2. Grant read-only role</tspan><tspan x="486" dy="24">Warehouse / Kafka / ISO 20022</tspan><tspan x="486" dy="24">Scoped to agreed sources</tspan></text>
+  <rect x="880" y="150" width="330" height="150" rx="18" fill="#fff7d7" stroke="#b8860b" stroke-width="2" />
+  <text x="896" y="181.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="896" dy="0">3. Approve outbound egress</tspan><tspan x="896" dy="24">Node dials control plane</tspan><tspan x="896" dy="24">No inbound ports opened</tspan></text>
+  <rect x="60" y="410" width="330" height="150" rx="18" fill="#e8f2fb" stroke="#1f77b4" stroke-width="2" />
+  <text x="76" y="441.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="76" dy="0">4. Feature map approval</tspan><tspan x="76" dy="24">Veritas SE authors mapping</tspan><tspan x="76" dy="24">Bank reviews + DPIA</tspan></text>
+  <rect x="470" y="410" width="330" height="150" rx="18" fill="#f1ebf7" stroke="#9467bd" stroke-width="2" />
+  <text x="486" y="441.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="486" dy="0">5. Shadow mode</tspan><tspan x="486" dy="24">Score live traffic</tspan><tspan x="486" dy="24">No actions taken</tspan><tspan x="486" dy="24">Measure lift</tspan></text>
+  <rect x="880" y="410" width="330" height="150" rx="18" fill="#fff2e3" stroke="#ff7f0e" stroke-width="2" />
+  <text x="896" y="441.6" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="20" text-anchor="start"><tspan x="896" dy="0">6. Go live</tspan><tspan x="896" dy="24">/predict or embedded signal</tspan><tspan x="896" dy="24">Join federation rounds</tspan><tspan x="896" dy="24">Optional Edge SDK rollout</tspan></text>
+  <polyline points="390,225 470,225" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="800,225 880,225" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="1045,300 1045,410" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="880,485 800,485" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <polyline points="470,485 390,485" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-1d2733)" />
+  <rect x="230" y="690" width="900" height="122.887" rx="18" fill="#f5f7fa" stroke="#1d2733" stroke-width="2" />
+  <text x="680" y="722.597" fill="#1d2733" font-family="Virgil, 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive, sans-serif" font-size="21" text-anchor="middle"><tspan x="680" dy="0">Adoption promise</tspan><tspan x="680" dy="25.2">No backend code. No model code. No ETL project.</tspan><tspan x="680" dy="25.2">Bank effort is approvals, one read-only role, one egress rule, and optional mobile</tspan><tspan x="680" dy="25.2">SDK integration.</tspan></text>
+</svg>
