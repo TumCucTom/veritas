@@ -77,39 +77,41 @@ export default function SalesSimulator() {
         <div className="hairline" />
       </header>
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Expected network members" value={NUMBER.format(result.networkMembers)} detail={`${NUMBER.format(result.paidPilots)} paid pilots`} tone="green" />
-        <MetricCard label="Modelled revenue" value={GBP.format(result.totalRevenue)} detail={`${GBP.format(result.membershipRevenue)} membership`} />
-        <MetricCard label="Modelled profit" value={GBP.format(result.profit)} detail={`${(result.margin * 100).toFixed(1)}% margin`} tone={result.profit >= 0 ? "green" : "red"} />
-        <MetricCard label="Break-even network" value={result.breakEvenMembers === null ? "Not reached" : `${result.breakEvenMembers} members`} detail={`${GBP.format(result.totalCost)} modelled cost`} />
-      </section>
+      <div className="relative z-20 flex flex-col gap-4 xl:sticky xl:top-0 xl:-mx-3 xl:rounded-b-[24px] xl:border-x xl:border-b xl:border-border-default/60 xl:bg-bg-deep/95 xl:px-3 xl:pb-4 xl:pt-3 xl:backdrop-blur-xl">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Expected network members" value={NUMBER.format(result.networkMembers)} detail={`${NUMBER.format(result.paidPilots)} paid pilots`} tone="green" />
+          <MetricCard label="Modelled revenue" value={GBP.format(result.totalRevenue)} detail={`${GBP.format(result.membershipRevenue)} membership`} />
+          <MetricCard label="Modelled profit" value={GBP.format(result.profit)} detail={`${(result.margin * 100).toFixed(1)}% margin`} tone={result.profit >= 0 ? "green" : "red"} />
+          <MetricCard label="Break-even network" value={result.breakEvenMembers === null ? "Not reached" : `${result.breakEvenMembers} members`} detail={`${GBP.format(result.totalCost)} modelled cost`} />
+        </section>
 
-      <section className="rounded-[20px] border border-border-default bg-bg-surface/75 p-5 shadow-[var(--shadow-raise)] sm:p-7">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="eyebrow text-fed">Expected pipeline</p>
-            <h2 className="mt-2 font-display text-2xl tracking-tight text-text-primary">From account list to network</h2>
+        <section className="rounded-[20px] border border-border-default bg-bg-surface/95 p-5 shadow-[var(--shadow-raise)] sm:p-7">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="eyebrow text-fed">Expected pipeline</p>
+              <h2 className="mt-2 font-display text-2xl tracking-tight text-text-primary">From account list to network</h2>
+            </div>
+            <p className="max-w-xl text-right text-[12px] leading-relaxed text-text-muted">
+              Expected values may be fractional because the model applies conversion rates rather than claiming completed deals.
+            </p>
           </div>
-          <p className="max-w-xl text-right text-[12px] leading-relaxed text-text-muted">
-            Expected values may be fractional because the model applies conversion rates rather than claiming completed deals.
-          </p>
-        </div>
-        <div className="mt-6 grid gap-3 md:grid-cols-5">
-          {pipeline.map((stage, index) => {
-            const width = inputs.targetAccounts > 0 ? Math.max(7, (stage.value / inputs.targetAccounts) * 100) : 7;
-            return (
-              <div key={stage.label} className="relative overflow-hidden rounded-[16px] border border-border-default bg-bg-deep p-4">
-                <div className="absolute inset-y-0 left-0 opacity-15" style={{ width: `${width}%`, background: stage.accent ? "var(--fed)" : "var(--accent-gold)" }} />
-                <div className="relative">
-                  <p className="font-mono text-[10px] text-text-muted">0{index + 1}</p>
-                  <p className="mt-4 tabular font-display text-3xl text-text-primary">{NUMBER.format(stage.value)}</p>
-                  <p className="mt-1 text-[12px] font-semibold text-text-secondary">{stage.label}</p>
+          <div className="mt-6 grid gap-3 md:grid-cols-5">
+            {pipeline.map((stage, index) => {
+              const width = inputs.targetAccounts > 0 ? Math.max(7, (stage.value / inputs.targetAccounts) * 100) : 7;
+              return (
+                <div key={stage.label} className="relative overflow-hidden rounded-[16px] border border-border-default bg-bg-deep p-4">
+                  <div className="absolute inset-y-0 left-0 opacity-15" style={{ width: `${width}%`, background: stage.accent ? "var(--fed)" : "var(--accent-gold)" }} />
+                  <div className="relative">
+                    <p className="font-mono text-[10px] text-text-muted">0{index + 1}</p>
+                    <p className="mt-4 tabular font-display text-3xl text-text-primary">{NUMBER.format(stage.value)}</p>
+                    <p className="mt-1 text-[12px] font-semibold text-text-secondary">{stage.label}</p>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+              );
+            })}
+          </div>
+        </section>
+      </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.05fr_1.45fr]">
         <section className="rounded-[20px] border border-border-default bg-bg-surface/75 p-5 shadow-[var(--shadow-raise)] sm:p-7">
