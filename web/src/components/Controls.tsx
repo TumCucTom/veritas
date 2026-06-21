@@ -68,7 +68,18 @@ export default function Controls() {
         {campaignActive ? "Campaign live" : "Inject scam campaign"}
       </button>
 
-      <ToggleButton active={autoRun} onClick={() => setAutoRun((v) => !v)} disabled={busy !== null}>
+      <ToggleButton
+        active={autoRun}
+        onClick={() => {
+          // Starting auto-run with no live campaign would just advance an
+          // already-quiet baseline where siloed and federated sit at the same
+          // ~0.9 — i.e. "the two look identical". Kick off the scam campaign so
+          // the race actually diverges the moment you press play.
+          if (!autoRun && !campaignActive) void run("campaign", api.injectCampaign);
+          setAutoRun((v) => !v);
+        }}
+        disabled={busy !== null}
+      >
         {autoRun ? "Pause auto-run" : "Auto-run"}
       </ToggleButton>
 
