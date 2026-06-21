@@ -16,6 +16,11 @@ import EdgeFleetPanel from "../components/EdgeFleetPanel";
 import EmbeddingAtlas from "../components/EmbeddingAtlas";
 import MuleGraph from "../components/MuleGraph";
 import FederationPulse from "../components/FederationPulse";
+import EnsembleStack from "../components/EnsembleStack";
+import SequenceTimeline from "../components/SequenceTimeline";
+import FederatedGbdt from "../components/FederatedGbdt";
+import PrivacyBudget from "../components/PrivacyBudget";
+import ZkProof from "../components/ZkProof";
 
 export default function Home() {
   return (
@@ -49,14 +54,24 @@ export default function Home() {
               </h2>
               <p className="mt-1 max-w-2xl text-[14px] leading-relaxed text-text-secondary">
                 Every frame below is precomputed from the real Veritas models — the learned
-                embedding space, the cross-bank GraphSAGE GNN, and one secure-aggregation round —
-                not mock-ups.
+                embedding space, the stacked ensemble, the cross-bank GraphSAGE GNN, the GRU
+                sequence model, federated gradient-boosted trees, differential-privacy accounting,
+                secure aggregation, and a zero-knowledge norm proof. Real outputs, not mock-ups.
               </p>
             </div>
             <EmbeddingAtlas />
+            <EnsembleStack />
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <MuleGraph />
+              <SequenceTimeline />
+            </div>
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <FederatedGbdt />
               <FederationPulse />
+            </div>
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <PrivacyBudget />
+              <ZkProof />
             </div>
           </section>
 
