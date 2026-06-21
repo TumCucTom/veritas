@@ -38,3 +38,7 @@ models/
 *.log
 .idea/
 .vscode/
+
+# landing showcase build deps
+landing/showcase/node_modules/
+landing/showcase/dist/

@@ -1,0 +1,152 @@
+@import "tailwindcss";
+
+/*
+  Veritas — dark-luxury editorial trust/finance direction.
+  Design tokens + base styles copied from web/src/app/globals.css.
+  Fonts are loaded via a Google Fonts <link> in index.html; here we map the
+  Next.js font CSS variables the components expect onto the loaded families.
+*/
+:root {
+  --font-fraunces: "Fraunces";
+  --font-inter: "Inter";
+  --font-jetbrains: "JetBrains Mono";
+
+  --bg-deep: #06090f;
+  --bg-base: #0a0e18;
+  --bg-surface: #0f1626;
+  --bg-surface-2: #16202f;
+  --border-default: #1f2a3d;
+  --border-strong: #30405b;
+
+  --text-primary: #f5f2ea;
+  --text-secondary: #a6b0c1;
+  --text-muted: #69748a;
+
+  --accent-gold: #e2b66c;
+  --accent-gold-soft: #f4dba6;
+
+  --fed: #3ddc97;
+  --fed-deep: #0d6e4f;
+  --fed-glow: rgba(61, 220, 151, 0.30);
+  --silo: #fb5b63;
+  --silo-deep: #7a1d22;
+  --silo-glow: rgba(251, 91, 99, 0.28);
+  --neutral-dot: #283446;
+
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SF Mono", monospace;
+
+  --radius-panel: 18px;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-panel: inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    0 32px 72px -34px rgba(0, 0, 0, 0.92);
+  --shadow-raise: inset 0 1px 0 0 rgba(255, 255, 255, 0.045),
+    0 14px 38px -20px rgba(0, 0, 0, 0.8);
+}
+
+@theme inline {
+  --color-bg-deep: var(--bg-deep);
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-surface-2: var(--bg-surface-2);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-accent-gold: var(--accent-gold);
+  --color-fed: var(--fed);
+  --color-silo: var(--silo);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  letter-spacing: -0.011em;
+  background-image:
+    radial-gradient(115% 85% at 6% -12%, rgba(226, 182, 108, 0.06), transparent 42%),
+    radial-gradient(85% 75% at 100% -5%, rgba(61, 220, 151, 0.045), transparent 48%),
+    radial-gradient(95% 75% at 50% 118%, rgba(251, 91, 99, 0.035), transparent 52%),
+    linear-gradient(transparent 0 95%, rgba(255, 255, 255, 0.018) 95% 100%),
+    linear-gradient(90deg, transparent 0 95%, rgba(255, 255, 255, 0.018) 95% 100%);
+  background-size:
+    100% 100%, 100% 100%, 100% 100%, 56px 56px, 56px 56px;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: var(--accent-gold);
+  color: var(--bg-deep);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hairline {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--border-strong) 18%,
+    var(--border-strong) 82%,
+    transparent
+  );
+  height: 1px;
+}
+
+@keyframes veritas-flash {
+  0% {
+    box-shadow: 0 0 0 0 var(--silo-glow);
+    border-color: var(--silo);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(240, 74, 82, 0);
+    border-color: var(--border-default);
+  }
+}
+.attack-flash {
+  animation: veritas-flash 1.2s var(--ease-out-expo);
+}
+
+@keyframes veritas-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: veritas-rise 0.7s var(--ease-out-expo) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attack-flash,
+  .rise {
+    animation: none;
+  }
+}
