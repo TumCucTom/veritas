@@ -169,6 +169,22 @@
   .person .role{font-size:13.5px;color:var(--ink-2);margin-top:5px}
   .person .prev{font-size:12.5px;color:var(--ink-3);margin-top:10px;font-family:var(--fmono);letter-spacing:.02em}
 
+  /* ---- model band ---- */
+  .btn.live{background:var(--green);border-color:var(--green);color:#fff}
+  .btn.live:hover{background:#0c6e5a}
+  .modelband{background:var(--ink);color:var(--paper);padding:clamp(66px,5vw,98px) 0;border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+  .modelband:before{content:"";position:absolute;inset:0;background:radial-gradient(85% 120% at 88% -10%,rgba(14,95,78,.24),transparent 55%);pointer-events:none}
+  .modelband .wrap{position:relative}
+  .modelband .mono{color:#5cc3a8}
+  .modelband h2{font-family:var(--fdisplay);font-weight:600;letter-spacing:-0.025em;font-size:clamp(2rem,1.4rem+2.6vw,3.5rem);color:var(--paper);margin:16px 0;max-width:20ch;line-height:1.04}
+  .modelband p{color:#b9bdc4;font-size:clamp(1rem,.95rem+.3vw,1.18rem);max-width:62ch;margin-bottom:30px}
+  .modelband .btn-big{display:inline-flex;align-items:center;gap:10px;font-family:var(--fbody);font-size:16px;font-weight:600;padding:16px 30px;border-radius:999px;background:var(--green);color:#fff;border:1px solid var(--green);transition:.2s}
+  .modelband .btn-big:hover{background:#0c6e5a;transform:translateY(-2px);box-shadow:0 16px 36px -16px rgba(14,95,78,.85)}
+  .modelband .taglist{margin-top:30px;font-family:var(--fmono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#6f747d;display:flex;gap:10px 16px;flex-wrap:wrap}
+  .modelband .taglist span{white-space:nowrap;position:relative;padding-right:16px}
+  .modelband .taglist span:after{content:"·";position:absolute;right:4px;color:#3a3e46}
+  .modelband .taglist span:last-child:after{content:""}
+
   /* ---- cta / footer ---- */
   .endcta{padding:104px 0;text-align:center;background:var(--ink);color:var(--paper);border:0}
   .endcta h2{font-size:clamp(2rem,1.4rem+2.4vw,3.4rem);color:var(--paper);max-width:18ch;margin:0 auto 22px}
@@ -220,7 +236,7 @@
           <p class="lede">Veritas is a cross-bank fraud-intelligence network. Member banks learn from each other's mule and scam signals — <strong>without a single customer record ever leaving the bank.</strong> The intelligence moves; the data never does.</p>
           <div class="cta" style="margin-top:26px">
             <a class="btn" href="#contact">Request a pilot</a>
-            <a class="btn ghost" href="demo/index.html">See the live models</a>
+            <a class="btn live" href="demo/index.html">See the live models →</a>
           </div>
         </div>
         <div class="meta rv">
@@ -342,6 +358,19 @@
     </div>
   </section>
 
+  <!-- LIVE MODELS BAND -->
+  <section class="modelband">
+    <div class="wrap">
+      <span class="mono">Interactive · runs in your browser · no backend</span>
+      <h2>See the models — not the marketing.</h2>
+      <p>Orbit the 3D embedding space as fraud pulls away from legitimate traffic. Watch the ensemble vote, the cross-bank GNN surface mule rings, Multi-Krum reject a poisoned update, the differential-privacy budget spend, and a zero-knowledge proof verify — all eight model surfaces, animated from real model outputs.</p>
+      <a class="btn-big" href="demo/index.html">Open the live model gallery →</a>
+      <div class="taglist">
+        <span>Embedding atlas</span><span>Stacked ensemble</span><span>Cross-bank GNN</span><span>GRU sequence</span><span>Federated GBDT</span><span>Secure aggregation</span><span>DP budget</span><span>Zero-knowledge proof</span>
+      </div>
+    </div>
+  </section>
+
   <!-- TRUST -->
   <section class="sec" id="trust">
     <div class="wrap">
@@ -384,13 +413,6 @@
         </div>
       </div>
 
-      <div class="rv" style="margin-top:34px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;justify-content:space-between;padding:24px 28px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)">
-        <div style="max-width:46ch">
-          <span class="mono" style="display:block;margin-bottom:7px;color:var(--green)">Live model gallery</span>
-          <span style="font-size:15px;color:var(--ink-2)">See all eight model surfaces — the 3D embedding space, the stacked ensemble, the cross-bank GNN, secure aggregation, the privacy budget and the zero-knowledge proof — running entirely in your browser, from real model outputs.</span>
-        </div>
-        <a class="btn" href="demo/index.html">Open the live models →</a>
-      </div>
     </div>
   </section>
 
