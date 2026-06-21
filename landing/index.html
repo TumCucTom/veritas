@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Veritas — Cross-bank fraud intelligence</title>
+<meta name="description" content="A sovereign fraud-intelligence network. Banks learn from each other's fraud signals without sharing a single customer record — federated, private, auditable." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f6f5f0; --paper-2:#efede6; --panel:#fbfaf7;
+    --ink:#16181c; --ink-2:#3a3e46; --ink-3:#6b6f78;
+    --line:#e0ddd2; --line-2:#d2cfc2;
+    --green:#0e5f4e; --green-d:#0a4438; --coral:#bb4631; --coral-soft:#f3e3de;
+    --r:14px;
+    --fdisplay:"Space Grotesk",system-ui,sans-serif;
+    --fbody:"Inter",system-ui,sans-serif;
+    --fmono:"Space Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:var(--fbody); background:var(--paper); color:var(--ink);
+    line-height:1.55; -webkit-font-smoothing:antialiased; letter-spacing:-0.01em;
+    overflow-x:hidden;
+  }
+  .wrap{max-width:1140px;margin:0 auto;padding:0 28px}
+  section{position:relative}
+  a{color:inherit;text-decoration:none}
+  .mono{font-family:var(--fmono);font-size:11.5px;letter-spacing:0.16em;text-transform:uppercase;color:var(--ink-3)}
+  h1,h2,h3{font-family:var(--fdisplay);font-weight:600;letter-spacing:-0.025em;line-height:1.03}
+  .lede{color:var(--ink-2);font-size:clamp(1.02rem,0.95rem+0.4vw,1.22rem);line-height:1.5;max-width:46ch}
+  .accent{color:var(--green)}
+  .neg{color:var(--coral)}
+
+  /* ---- nav ---- */
+  header.nav{position:sticky;top:0;z-index:50;background:rgba(246,245,240,0.82);backdrop-filter:blur(14px);border-bottom:1px solid transparent;transition:border-color .3s}
+  header.nav.scrolled{border-color:var(--line)}
+  .navrow{display:flex;align-items:center;justify-content:space-between;height:68px}
+  .brand{display:flex;align-items:baseline;gap:10px}
+  .brand .mark{font-family:var(--fdisplay);font-weight:700;font-size:19px;letter-spacing:0.02em}
+  .brand .latin{font-family:var(--fmono);font-size:10.5px;letter-spacing:0.18em;text-transform:uppercase;color:var(--ink-3)}
+  nav.links{display:flex;gap:30px;align-items:center}
+  nav.links a{font-size:14px;color:var(--ink-2);transition:color .2s}
+  nav.links a:hover{color:var(--ink)}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;padding:10px 17px;border-radius:999px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);transition:.2s;white-space:nowrap}
+  .btn:hover{background:#000;transform:translateY(-1px)}
+  .btn.ghost{background:transparent;color:var(--ink);border-color:var(--line-2)}
+  .btn.ghost:hover{border-color:var(--ink);background:transparent}
+  @media(max-width:840px){nav.links{display:none}}
+
+  /* ---- hero ---- */
+  .hero{padding:96px 0 64px;border-bottom:1px solid var(--line)}
+  .hero .eyebrow{display:inline-flex;align-items:center;gap:9px;margin-bottom:26px}
+  .hero .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px rgba(14,95,78,.14)}
+  .hero h1{font-size:clamp(2.5rem,1.6rem+4.1vw,5rem);max-width:15ch}
+  .hero h1 em{font-style:normal;color:var(--coral)}
+  .hero .sub{margin-top:28px;display:grid;grid-template-columns:1.1fr 0.9fr;gap:40px;align-items:end}
+  @media(max-width:760px){.hero .sub{grid-template-columns:1fr;gap:24px}}
+  .hero .cta{display:flex;gap:12px;margin-top:8px;flex-wrap:wrap}
+  .hero .meta{font-family:var(--fmono);font-size:11.5px;letter-spacing:.1em;color:var(--ink-3);text-transform:uppercase;line-height:1.9}
+  .hero .meta b{color:var(--ink);font-weight:700}
+
+  /* ---- strip ---- */
+  .strip{border-bottom:1px solid var(--line);background:var(--paper-2)}
+  .strip .wrap{display:flex;flex-wrap:wrap;gap:8px 48px;padding:20px 28px;align-items:center}
+  .strip .mono{color:var(--ink-3)}
+  .strip .figs{display:flex;flex-wrap:wrap;gap:8px 40px;margin-left:auto}
+  .strip .fig b{font-family:var(--fdisplay);font-weight:600;font-size:15px;color:var(--ink)}
+  .strip .fig span{font-size:13px;color:var(--ink-3);margin-left:7px}
+
+  /* ---- section frame ---- */
+  .sec{padding:96px 0;border-bottom:1px solid var(--line)}
+  .sec-head{display:grid;grid-template-columns:0.34fr 0.66fr;gap:40px;margin-bottom:54px}
+  @media(max-width:760px){.sec-head{grid-template-columns:1fr;gap:14px;margin-bottom:36px}}
+  .sec-head h2{font-size:clamp(1.7rem,1.2rem+1.6vw,2.5rem)}
+  .sec-head .kicker{position:sticky;top:90px;align-self:start}
+  .sec-head .kicker .mono{display:block;margin-bottom:10px}
+  .sec-head .kicker p{font-size:13.5px;color:var(--ink-3);max-width:24ch}
+
+  /* ---- problem case cards ---- */
+  .cases{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  @media(max-width:760px){.cases{grid-template-columns:1fr}}
+  .case{background:var(--panel);padding:30px 30px 34px}
+  .case .tag{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:18px}
+  .case .name{font-family:var(--fdisplay);font-weight:600;font-size:18px}
+  .case .loss{font-family:var(--fdisplay);font-weight:700;font-size:22px;color:var(--coral);white-space:nowrap}
+  .case ul{list-style:none;display:flex;flex-direction:column;gap:9px;margin:0 0 20px}
+  .case li{font-size:14px;color:var(--ink-2);padding-left:18px;position:relative}
+  .case li:before{content:"";position:absolute;left:0;top:9px;width:5px;height:5px;border-radius:50%;background:var(--coral)}
+  .case .vx{border-top:1px solid var(--line);padding-top:16px;font-size:13.5px;color:var(--ink-2)}
+  .case .vx b{font-family:var(--fmono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--green);display:block;margin-bottom:6px}
+  .pull{margin-top:34px;font-family:var(--fdisplay);font-weight:500;font-size:clamp(1.3rem,1rem+1.4vw,2rem);letter-spacing:-0.02em;max-width:20ch}
+  .pull span{color:var(--ink-3)}
+
+  /* ---- why now ---- */
+  .whynow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px}
+  @media(max-width:760px){.whynow{grid-template-columns:1fr}}
+  .wn{padding:26px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}
+  .wn .n{font-family:var(--fmono);font-size:12px;color:var(--green);letter-spacing:.1em;margin-bottom:14px}
+  .wn h3{font-size:18px;margin-bottom:9px}
+  .wn p{font-size:14px;color:var(--ink-2)}
+
+  /* ---- approach split ---- */
+  .approach{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+  @media(max-width:860px){.approach{grid-template-columns:1fr;gap:32px}}
+  .approach h2{font-size:clamp(1.9rem,1.3rem+1.8vw,2.8rem);margin-bottom:20px}
+  .approach .moves{margin-top:26px;border-top:1px solid var(--line)}
+  .approach .moves div{display:flex;gap:16px;padding:15px 0;border-bottom:1px solid var(--line);font-size:14.5px;color:var(--ink-2)}
+  .approach .moves b{font-family:var(--fmono);font-size:11px;letter-spacing:.1em;color:var(--ink);min-width:26px}
+  /* schematic */
+  .schem{aspect-ratio:1/0.92;border:1px solid var(--line);border-radius:var(--r);background:
+     radial-gradient(120% 90% at 50% 8%, rgba(14,95,78,.05), transparent 55%), var(--panel);
+     position:relative;overflow:hidden}
+  .schem svg{position:absolute;inset:0;width:100%;height:100%}
+
+  /* ---- trust grid ---- */
+  .grid5{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  @media(max-width:760px){.grid5{grid-template-columns:1fr}}
+  .cell{background:var(--panel);padding:26px}
+  .cell .ic{width:30px;height:30px;border-radius:8px;border:1px solid var(--line-2);display:grid;place-items:center;margin-bottom:16px;color:var(--green)}
+  .cell h3{font-size:16px;margin-bottom:8px}
+  .cell p{font-size:13.5px;color:var(--ink-2)}
+  .cell code{font-family:var(--fmono);font-size:11.5px;color:var(--ink-3);background:var(--paper-2);padding:1px 6px;border-radius:5px}
+
+  /* ---- running vs roadmap ---- */
+  .runs{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  @media(max-width:760px){.runs{grid-template-columns:1fr}}
+  .runcol{border:1px solid var(--line);border-radius:var(--r);padding:26px 28px;background:var(--panel)}
+  .runcol .h{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .runcol .pill{font-family:var(--fmono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;padding:4px 9px;border-radius:999px}
+  .pill.live{background:rgba(14,95,78,.1);color:var(--green)}
+  .pill.road{background:var(--paper-2);color:var(--ink-3)}
+  .runcol ul{list-style:none;display:flex;flex-direction:column;gap:11px}
+  .runcol li{font-size:14px;color:var(--ink-2);padding-left:22px;position:relative}
+  .runcol li:before{position:absolute;left:0;top:0;font-family:var(--fmono);font-size:13px}
+  .runcol.l li:before{content:"✓";color:var(--green)}
+  .runcol.r li:before{content:"→";color:var(--ink-3)}
+
+  /* ---- commercial ---- */
+  .price{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  @media(max-width:760px){.price{grid-template-columns:1fr}}
+  .tier{background:var(--panel);padding:30px 28px;display:flex;flex-direction:column;gap:6px}
+  .tier .stage{font-family:var(--fmono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--green)}
+  .tier .amt{font-family:var(--fdisplay);font-weight:600;font-size:27px;margin-top:6px}
+  .tier .amt span{font-size:14px;color:var(--ink-3);font-weight:400}
+  .tier .what{font-size:13.5px;color:var(--ink-2);margin-top:8px}
+  .tier .lbl{font-family:var(--fmono);font-size:10.5px;letter-spacing:.14em;color:var(--ink-3);margin-top:auto;padding-top:18px}
+  .roi{margin-top:22px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:14px;color:var(--ink-2)}
+  .roi .chip{font-family:var(--fmono);font-size:11.5px;letter-spacing:.06em;background:var(--paper-2);border:1px solid var(--line);padding:7px 13px;border-radius:999px;color:var(--ink)}
+
+  /* ---- moat ---- */
+  .moat{display:grid;grid-template-columns:repeat(4,1fr);gap:24px}
+  @media(max-width:860px){.moat{grid-template-columns:1fr 1fr}}
+  @media(max-width:520px){.moat{grid-template-columns:1fr}}
+  .mt{border-top:2px solid var(--ink);padding-top:16px}
+  .mt .mono{display:block;margin-bottom:10px}
+  .mt h3{font-size:16px;margin-bottom:8px}
+  .mt p{font-size:13.5px;color:var(--ink-2)}
+
+  /* ---- team ---- */
+  .team{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+  @media(max-width:760px){.team{grid-template-columns:1fr}}
+  .person{border:1px solid var(--line);border-radius:var(--r);padding:26px;background:var(--panel)}
+  .person .av{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-family:var(--fdisplay);font-weight:700;color:#fff;background:var(--green);margin-bottom:16px}
+  .person h3{font-size:17px}
+  .person .role{font-size:13.5px;color:var(--ink-2);margin-top:5px}
+  .person .prev{font-size:12.5px;color:var(--ink-3);margin-top:10px;font-family:var(--fmono);letter-spacing:.02em}
+
+  /* ---- cta / footer ---- */
+  .endcta{padding:104px 0;text-align:center;background:var(--ink);color:var(--paper);border:0}
+  .endcta h2{font-size:clamp(2rem,1.4rem+2.4vw,3.4rem);color:var(--paper);max-width:18ch;margin:0 auto 22px}
+  .endcta .lede{color:#b9bcc2;margin:0 auto 32px}
+  .endcta .btn{background:var(--paper);color:var(--ink);border-color:var(--paper)}
+  .endcta .btn:hover{background:#fff}
+  .endcta .btn.ghost{background:transparent;color:var(--paper);border-color:#3a3e46}
+  footer.site{padding:46px 0;background:var(--ink);color:#8a8e96;border-top:1px solid #262a30}
+  footer.site .row{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;align-items:center}
+  footer.site a{color:#c6c9cf}
+  footer.site a:hover{color:#fff}
+  footer.site .contacts{display:flex;gap:26px;flex-wrap:wrap;font-size:13.5px}
+  .fineprint{margin-top:26px;font-size:12px;color:#6b6f78;max-width:70ch}
+
+  /* reveal */
+  .rv{opacity:0;transform:translateY(16px);transition:opacity .7s cubic-bezier(.16,1,.3,1),transform .7s cubic-bezier(.16,1,.3,1)}
+  .rv.in{opacity:1;transform:none}
+  @media(prefers-reduced-motion:reduce){.rv{opacity:1;transform:none;transition:none}}
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap navrow">
+    <a class="brand" href="#top">
+      <span class="mark">VERITAS</span>
+      <span class="latin">vos liberabit</span>
+    </a>
+    <nav class="links">
+      <a href="#problem">Problem</a>
+      <a href="#approach">Approach</a>
+      <a href="#trust">Trust</a>
+      <a href="#commercial">Commercial</a>
+      <a href="#team">Team</a>
+    </nav>
+    <a class="btn" href="#contact">Request a pilot</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="eyebrow rv"><span class="dot"></span><span class="mono">Sovereign fraud intelligence · Federated, private, auditable</span></div>
+      <h1 class="rv">Fraud is networked.<br>Fraud detection <em>isn't</em>.</h1>
+      <div class="sub">
+        <div class="rv">
+          <p class="lede">Veritas is a cross-bank fraud-intelligence network. Member banks learn from each other's mule and scam signals — <strong>without a single customer record ever leaving the bank.</strong> The intelligence moves; the data never does.</p>
+          <div class="cta" style="margin-top:26px">
+            <a class="btn" href="#contact">Request a pilot</a>
+            <a class="btn ghost" href="#approach">How it works</a>
+          </div>
+        </div>
+        <div class="meta rv">
+          Built on federated learning &amp; FLock<br>
+          <b>£460M</b> UK APP fraud / year<br>
+          <b>0</b> customer records shared<br>
+          Privacy · identity · audit, first-class
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STRIP -->
+  <div class="strip">
+    <div class="wrap">
+      <span class="mono">The pattern</span>
+      <div class="figs">
+        <span class="fig"><b>Many fragmented signals.</b><span>One coordinated criminal network.</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROBLEM -->
+  <section class="sec" id="problem">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker"><span class="mono">01 — The problem</span><p>Authorised Push Payment fraud is the UK's largest fraud category. It is networked by design.</p></div>
+        <div>
+          <h2 class="rv">Mule networks span banks on purpose — so no single institution ever sees the whole pattern.</h2>
+          <p class="lede rv" style="margin-top:18px">Criminals move money across many accounts at many banks before any one of them can connect the dots. Each bank holds a fragment; none holds the picture. And banks legally cannot pool customer data to assemble it.</p>
+        </div>
+      </div>
+
+      <div class="cases rv">
+        <div class="case">
+          <div class="tag"><span class="name">iSpoof banking fraud</span><span class="loss">£43M UK</span></div>
+          <ul>
+            <li>10 million spoofed calls impersonating banks</li>
+            <li>Victims manipulated into transferring money</li>
+            <li>~£100M lost globally</li>
+          </ul>
+          <div class="vx"><b>With Veritas</b>Once one bank confirmed a receiving account as a mule, that behaviour could have improved every member's model — similar accounts reviewed or frozen before further withdrawals.</div>
+        </div>
+        <div class="case">
+          <div class="tag"><span class="name">Monster Credits investment fraud</span><span class="loss">£28M</span></div>
+          <ul>
+            <li>3,500+ victims across multiple countries</li>
+            <li>Hundreds of accounts, funds moved between them</li>
+            <li>Unusual velocity, rapid onward transfers</li>
+          </ul>
+          <div class="vx"><b>With Veritas</b>Banks could have collectively learned the receiving-account pattern — funds from many unrelated victims, high velocity. A pattern confirmed at one bank strengthens detection at the others.</div>
+        </div>
+      </div>
+      <p class="pull rv">A pattern confirmed at one bank <span>should make every bank smarter.</span></p>
+    </div>
+  </section>
+
+  <!-- WHY NOW -->
+  <section class="sec" id="whynow">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker"><span class="mono">02 — Why now</span><p>Regulation just turned cross-bank fraud into a board-level liability.</p></div>
+        <div><h2 class="rv">The economics changed in October 2024.</h2></div>
+      </div>
+      <div class="whynow">
+        <div class="wn rv"><div class="n">PSR mandate</div><h3>The receiving bank is now liable</h3><p>Since October 2024 the Payment Systems Regulator splits APP reimbursement 50/50 between the sending and receiving institution.</p></div>
+        <div class="wn rv"><div class="n">The consequence</div><h3>Fraud arriving from elsewhere is now your cost</h3><p>Detecting mules that land from another bank moved from "nice to have" to a direct, attributable line on the P&amp;L.</p></div>
+        <div class="wn rv"><div class="n">The blocker</div><h3>You still can't share the data</h3><p>GDPR, competition law and commercial sensitivity make pooling customer transactions a non-starter. The need is new; the constraint is not.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- APPROACH -->
+  <section class="sec" id="approach">
+    <div class="wrap">
+      <div class="approach">
+        <div>
+          <span class="mono rv" style="display:block;margin-bottom:18px">03 — The approach</span>
+          <h2 class="rv">A sovereign intelligence network — collective learning, no central data lake.</h2>
+          <p class="lede rv">Each bank runs a sealed node behind its own firewall. It trains locally on its own books and shares only privacy-protected model updates. Veritas aggregates them into one network model — built with differential privacy, an ensemble of ML methods, and FLock for federated-learning orchestration.</p>
+          <div class="moves rv">
+            <div><b>A</b><span>The node trains locally — raw records never leave the bank.</span></div>
+            <div><b>B</b><span>Updates are clipped, differentially-private, and Byzantine-checked by Multi-Krum before they count.</span></div>
+            <div><b>C</b><span>Every contribution and rejection is written to a signed, tamper-evident log.</span></div>
+          </div>
+        </div>
+        <div class="schem rv" aria-hidden="true">
+          <svg viewBox="0 0 400 370" fill="none">
+            <defs>
+              <marker id="ar" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7Z" fill="#0e5f4e"/></marker>
+            </defs>
+            <!-- bank nodes -->
+            <g font-family="Space Mono, monospace" font-size="9" fill="#6b6f78">
+              <circle cx="60" cy="70" r="26" fill="#fbfaf7" stroke="#d2cfc2"/><text x="60" y="73" text-anchor="middle">bank A</text>
+              <circle cx="60" cy="185" r="26" fill="#fbfaf7" stroke="#d2cfc2"/><text x="60" y="188" text-anchor="middle">bank B</text>
+              <circle cx="60" cy="300" r="26" fill="#fbfaf7" stroke="#d2cfc2"/><text x="60" y="303" text-anchor="middle">bank C</text>
+            </g>
+            <!-- gradient arrows -->
+            <g stroke="#0e5f4e" stroke-width="1.4" opacity="0.85">
+              <path d="M88 78 C 180 95, 200 150, 250 178" marker-end="url(#ar)"/>
+              <path d="M88 185 C 170 185, 200 185, 250 185" marker-end="url(#ar)"/>
+              <path d="M88 292 C 180 275, 200 220, 250 192" marker-end="url(#ar)"/>
+            </g>
+            <text x="120" y="40" font-family="Space Mono, monospace" font-size="8.5" fill="#bb4631" letter-spacing="1">DP-clipped updates only</text>
+            <!-- aggregator -->
+            <rect x="252" y="150" width="96" height="70" rx="12" fill="#16181c"/>
+            <text x="300" y="180" text-anchor="middle" font-family="Space Grotesk, sans-serif" font-size="12" fill="#fff" font-weight="600">network</text>
+            <text x="300" y="197" text-anchor="middle" font-family="Space Grotesk, sans-serif" font-size="12" fill="#fff" font-weight="600">model</text>
+            <!-- transparency log -->
+            <rect x="252" y="244" width="96" height="44" rx="10" fill="#fbfaf7" stroke="#d2cfc2"/>
+            <text x="300" y="262" text-anchor="middle" font-family="Space Mono, monospace" font-size="8" fill="#6b6f78">signed merkle</text>
+            <text x="300" y="274" text-anchor="middle" font-family="Space Mono, monospace" font-size="8" fill="#6b6f78">audit log</text>
+            <path d="M300 220 L300 242" stroke="#d2cfc2" stroke-width="1.2" marker-end="url(#ar)"/>
+            <text x="200" y="345" text-anchor="middle" font-family="Space Mono, monospace" font-size="8.5" fill="#0e5f4e" letter-spacing="1.5">NO RAW CUSTOMER DATA CROSSES THIS LINE</text>
+            <line x1="232" y1="20" x2="232" y2="320" stroke="#e0ddd2" stroke-dasharray="3 4"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TRUST -->
+  <section class="sec" id="trust">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker"><span class="mono">04 — Why it's credible</span><p>Privacy, identity, governance and bank plumbing are first-class — not afterthoughts.</p></div>
+        <div><h2 class="rv">The trust machinery is real, and it runs today.</h2></div>
+      </div>
+      <div class="grid5 rv">
+        <div class="cell"><div class="ic">◐</div><h3>Measured privacy</h3><p>An RDP accountant calibrates Gaussian noise and tracks spent epsilon — privacy is a number, not a promise. <code>/v1/privacy</code></p></div>
+        <div class="cell"><div class="ic">⬡</div><h3>Bank-grade identity</h3><p>Each node enrols with Ed25519 keys and signs EdDSA JWTs for every node-to-plane call.</p></div>
+        <div class="cell"><div class="ic">≡</div><h3>Audit trail</h3><p>A signed Merkle log records contributors, rejected members, model hash and proof roots.</p></div>
+        <div class="cell"><div class="ic">⇄</div><h3>Bank integration</h3><p>ISO 20022 <code>pacs.008</code>/<code>pain.001</code>, warehouse and Kafka-style connectors via <code>feature_map.yaml</code>.</p></div>
+        <div class="cell"><div class="ic">⟲</div><h3>Model governance</h3><p>Canary, promote and rollback make every model change reviewable before production.</p></div>
+        <div class="cell"><div class="ic">⛉</div><h3>Byzantine-robust</h3><p>Multi-Krum rejects poisoned updates; a zero-knowledge norm proof bounds them without revealing the update.</p></div>
+      </div>
+
+      <div class="runs rv" style="margin-top:24px">
+        <div class="runcol l">
+          <div class="h"><span class="pill live">Running now</span><span class="mono">Reference build proof</span></div>
+          <ul>
+            <li>Multi-node HTTP federation</li>
+            <li>Real flock-sdk model contract</li>
+            <li>DP updates + Multi-Krum rejection</li>
+            <li>Ed25519 / JWT member identity</li>
+            <li>Signed Merkle transparency proofs</li>
+            <li>Canary / promote / rollback</li>
+            <li>ISO 20022 connectors + edge SDK + console</li>
+          </ul>
+        </div>
+        <div class="runcol r">
+          <div class="h"><span class="pill road">Roadmap, honestly</span><span class="mono">Production hardening</span></div>
+          <ul>
+            <li>Hardware TEE remote quote attestation</li>
+            <li>FLock FL Alliance / on-chain anchor</li>
+            <li>Native TFLite / Core ML mobile runtime</li>
+            <li>Cloud-marketplace managed-app packaging</li>
+            <li>HSM-backed control-plane keys</li>
+            <li>Customer-specific warehouse adapters</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMMERCIAL -->
+  <section class="sec" id="commercial">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker"><span class="mono">05 — Commercial</span><p>Start where cross-bank losses are felt and integration risk is lowest.</p></div>
+        <div>
+          <h2 class="rv">A buyer shouldn't need faith. Shadow mode measures the lift before anyone signs.</h2>
+          <p class="lede rv" style="margin-top:18px"><strong>Economic buyer:</strong> Head of Fraud / Financial Crime at challengers, PSPs, building societies and telco fraud teams. <strong>Trigger:</strong> PSR APP reimbursement turning fraud into a board-level liability.</p>
+        </div>
+      </div>
+
+      <div class="price rv">
+        <div class="tier"><span class="stage">Land · paid pilot</span><div class="amt">£20K<span> / pilot</span></div><div class="what">Sealed node, shadow mode, lift report, DPIA &amp; security pack, integration plan.</div><span class="lbl">Prove value before annual conversion</span></div>
+        <div class="tier"><span class="stage">Retain · SaaS</span><div class="amt">£3–15K<span> / month</span></div><div class="what">Managed node, continuous model updates, per-tenant console and support.</div><span class="lbl">Recurring gross profit</span></div>
+        <div class="tier"><span class="stage">Expand · signal layer</span><div class="amt">£75–250K<span> / year</span></div><div class="what">Annual licence for the local node plus the cross-bank intelligence signal.</div><span class="lbl">£90K base ACV · ~70% gross margin</span></div>
+      </div>
+
+      <div class="roi rv">
+        <span><strong>ROI-gated pricing principle:</strong> the annual fee stays below verified annual fraud loss avoided.</span>
+        <span class="chip">recall at fixed alert budget</span>
+        <span class="chip">time-to-detect reduction</span>
+        <span class="chip">false-positive load</span>
+        <span class="chip">loss avoided &gt; ACV</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- MOAT -->
+  <section class="sec" id="moat">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker"><span class="mono">06 — Why it's a company</span><p>The wedge is one signal. The company is the network.</p></div>
+        <div><h2 class="rv">Veritas is not a fraud model. It's a cross-bank fraud-intelligence network.</h2></div>
+      </div>
+      <div class="moat">
+        <div class="mt rv"><span class="mono">Wedge</span><h3>Shadow-mode node</h3><p>No backend build: sealed node, read-only role, one outbound rule. Sit beside the incumbent fraud stack.</p></div>
+        <div class="mt rv"><span class="mono">Moat</span><h3>Compounding network</h3><p>Every new member improves coverage of the cross-bank graph. Audit trail and rails make switching hard.</p></div>
+        <div class="mt rv"><span class="mono">Not replacing</span><h3>A signal, not a platform</h3><p>Feedzai, Featurespace and Actimize stay the workflow. Veritas adds one cross-bank risk signal into them.</p></div>
+        <div class="mt rv"><span class="mono">Expansion</span><h3>Signal API</h3><p>Sell beside incumbents first; grow workflow footprint once trust is earned and the network compounds.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TEAM -->
+  <section class="sec" id="team">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker"><span class="mono">07 — Team</span><p>Product, AI ops and ML — with prior founding experience.</p></div>
+        <div><h2 class="rv">Built by operators across AI 2.0 and AI 3.0.</h2></div>
+      </div>
+      <div class="team">
+        <div class="person rv"><div class="av">TB</div><h3>Thomas Bale</h3><div class="role">Product @ Anima</div><div class="prev">Prev — founder, Fini &amp; Veloworks</div></div>
+        <div class="person rv"><div class="av">KK</div><h3>Kanghyeon Kim</h3><div class="role">AI Ops @ DigitalU3</div><div class="prev">Prev — founder, UOBQC</div></div>
+        <div class="person rv"><div class="av">EP</div><h3>Ella Pham</h3><div class="role">ML Engineering @ IBM</div><div class="prev">Project intern</div></div>
+      </div>
+      <p class="lede rv" style="margin-top:30px">Early external validation under way with <strong>Neotas</strong> and <strong>Kainos</strong>; calls scheduled with <strong>Seedcamp</strong> and in contact with <strong>Project Europe</strong>.</p>
+    </div>
+  </section>
+
+  <!-- END CTA -->
+  <section class="endcta" id="contact">
+    <div class="wrap">
+      <h2 class="rv">Run it in shadow mode. Price only on losses avoided.</h2>
+      <p class="lede rv">A sealed node, a read-only role, one outbound rule — scoring live traffic beside your existing stack, transmitting zero raw records. See the lift before you commit.</p>
+      <div class="cta rv" style="justify-content:center;display:flex;gap:12px;flex-wrap:wrap">
+        <a class="btn" href="mailto:tokbale@outlook.com?subject=Veritas%20pilot">Request a pilot</a>
+        <a class="btn ghost" href="mailto:tokbale@outlook.com?subject=Veritas">Talk to the team</a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site">
+    <div class="wrap">
+      <div class="row">
+        <div>
+          <div class="brand" style="margin-bottom:8px"><span class="mark" style="color:#fff">VERITAS</span> <span class="latin">vos liberabit</span></div>
+          <div style="font-size:13px;color:#8a8e96">Cross-bank fraud intelligence · Sovereign AI on FLock</div>
+        </div>
+        <div class="contacts">
+          <a href="mailto:tokbale@outlook.com">tokbale@outlook.com</a>
+          <a href="https://www.linkedin.com/in/thomas-bale" target="_blank" rel="noopener">Thomas Bale</a>
+          <a href="https://www.linkedin.com/in/kanghyeon-kim-3a478a271" target="_blank" rel="noopener">Kanghyeon Kim</a>
+          <a href="https://www.linkedin.com/in/ella-ha-anh-pham" target="_blank" rel="noopener">Ella Pham</a>
+        </div>
+      </div>
+      <p class="fineprint">The truth will set you free. Veritas trains across institutions without centralising data, designed to operate within data-protection and competition-law constraints. Commercial figures are assumptions for validation; pilot and ACV convert only after measured loss avoidance. Production hardening — hardware-TEE attestation, on-chain anchoring — is on the roadmap and labelled honestly.</p>
+    </div>
+  </footer>
+
+</main>
+
+<script>
+  // sticky nav border
+  const nav=document.getElementById('nav');
+  const onScroll=()=>nav.classList.toggle('scrolled',window.scrollY>8);
+  onScroll(); addEventListener('scroll',onScroll,{passive:true});
+  // scroll reveal
+  const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}})},{threshold:0.12,rootMargin:'0px 0px -8% 0px'});
+  document.querySelectorAll('.rv').forEach((el,i)=>{el.style.transitionDelay=(Math.min(i%6,5)*45)+'ms';io.observe(el);});
+</script>
+</body>
+</html>
