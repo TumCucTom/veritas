@@ -1,0 +1,196 @@
+# ---------------------------------------------------------------------------
+# Veritas problem-signal definition.
+#
+# This file is the single source of truth for "what problem are we hunting
+# evidence of". Edit the themes/phrases/queries here; every source adapter and
+# the relevance scorer read from this file. No code change needed to retarget
+# the bot at a different problem.
+# ---------------------------------------------------------------------------
+
+problem:
+  name: "Cross-institution fraud intelligence cannot be shared because raw data cannot be pooled"
+  statement: >
+    Banks and financial institutions cannot pool raw customer data to
+    collaboratively detect APP (authorised push payment) and mule-account fraud.
+    A fraud campaign hits one institution and then spreads to others, but privacy
+    law, data residency, and competitive concerns block sharing the underlying
+    records — so fraud intelligence does not propagate across the network. Veritas
+    claims to solve this with privacy-preserving federated learning (only model
+    deltas cross the trust boundary, never customer data).
+
+# A "theme" is one facet of the problem. Weight scales how strongly a match in
+# that theme counts toward an item's relevance score. Phrases are matched
+# case-insensitively as substrings on the combined title + body text.
+themes:
+  data_sharing_barrier:
+    weight: 3
+    description: Explicit pain about being unable to share / pool fraud or customer data.
+    phrases:
+      - "can't share fraud"
+      - "cannot share customer data"
+      - "can't share data"
+      - "data sharing"
+      - "data pooling"
+      - "pool data"
+      - "pooling data"
+      - "siloed data"
+      - "data silo"
+      - "data residency"
+      - "consortium data"
+      - "share fraud intelligence"
+      - "information sharing"
+      - "sharing fraud data"
+      - "regulatory barrier"
+      - "gdpr"
+      - "privacy law"
+
+  privacy_preserving_ml:
+    weight: 3
+    description: Demand for federated / privacy-preserving ML applied to fraud.
+    phrases:
+      - "federated learning"
+      - "federated analytics"
+      - "privacy-preserving"
+      - "privacy preserving"
+      - "differential privacy"
+      - "secure aggregation"
+      - "homomorphic encryption"
+      - "confidential computing"
+      - "trusted execution"
+      - "without sharing data"
+      - "data never leaves"
+      - "without pooling"
+      - "on-device model"
+
+  app_fraud:
+    weight: 2
+    description: APP / authorised push payment / scam reimbursement burden.
+    phrases:
+      - "app fraud"
+      - "authorised push payment"
+      - "authorized push payment"
+      - "push payment fraud"
+      - "scam reimbursement"
+      - "mandatory reimbursement"
+      - "psr reimbursement"
+      - "fraud reimbursement"
+      - "reimbursement liability"
+
+  mule_accounts:
+    weight: 2
+    description: Money-mule networks that move funds across institutions.
+    phrases:
+      - "money mule"
+      - "mule account"
+      - "mule network"
+      - "muling"
+
+  cross_bank:
+    weight: 2
+    description: Fraud that spans / moves between institutions.
+    phrases:
+      - "cross-bank"
+      - "cross bank"
+      - "cross-institution"
+      - "between banks"
+      - "fraud spreads"
+      - "same fraudster"
+      - "network of banks"
+      - "downstream bank"
+      - "receiving bank"
+
+  fraud_detection:
+    weight: 1
+    description: General fraud / financial-crime context (weak signal on its own).
+    phrases:
+      - "fraud detection"
+      - "financial crime"
+      - "fincrime"
+      - "transaction monitoring"
+      - "anti-money laundering"
+      - "money laundering"
+
+# At least one core term must be present for an item to count as on-topic
+# evidence at all. Stops generic ML / privacy chatter with no fraud angle.
+core_terms:
+  - fraud
+  - mule
+  - scam
+  - money laundering
+  - financial crime
+  - fincrime
+  - aml
+
+# Minimum relevance score for an item to be kept in the report.
+min_score: 3
+
+# Free-text queries handed to every source that supports search.
+queries:
+  - "APP fraud data sharing between banks"
+  - "money mule cross bank detection"
+  - "federated learning fraud detection banks"
+  - "banks share fraud intelligence privacy"
+  - "authorised push payment fraud reimbursement"
+  - "privacy preserving fraud detection"
+  - "fraud data silo banks GDPR"
+  - "collaborative fraud detection without sharing data"
+  # Broadened angles to raise recall across all sources.
+  - "consortium fraud model banks"
+  - "fraud intelligence sharing regulation"
+  - "transaction monitoring shared utility"
+  - "data clean room financial crime"
+  - "secure multiparty computation banking fraud"
+  - "scam payments cross institution"
+  - "Pay.UK PSR mandatory reimbursement fraud"
+  - "anti money laundering data sharing 314(b)"
+  - "fraud model without sharing customer data"
+  - "differential privacy financial transactions"
+
+# Per-source configuration. Disable a source by removing it or setting enabled:false.
+sources:
+  reddit:
+    enabled: true
+    # Needs Reddit OAuth app creds in env (REDDIT_CLIENT_ID/SECRET, optionally
+    # USERNAME/PASSWORD). Without them the source emits search links only —
+    # Reddit 403s unauthenticated API access. See sources/reddit.py.
+    subreddits: [fintech, AskBankers, fraud, GDPR, datascience, MachineLearning,
+                 ukpersonalfinance, BankingCareers, antifraud, Banking, CreditCards,
+                 algotrading, privacy, MLQuestions]
+    limit_per_query: 25
+
+  hackernews:
+    enabled: true
+    limit_per_query: 25
+
+  forums:
+    enabled: true
+    # Discourse-powered communities expose /search.json — drop base URLs here.
+    discourse:
+      - "https://community.openbankingexpo.com"   # example; replace with live forums
+    # Plain RSS/Atom feeds (industry blogs, forum digests).
+    rss:
+      - "https://www.finextra.com/rss/headlines.aspx"
+
+  jobs:
+    enabled: true
+    # Public ATS boards — no API key required.
+    greenhouse: [ravelin, featurespace, monzo, wise, gocardless, starlingbank,
+                 revolut, checkout, sardine, unit21, hawkai, lunar, zopa]
+    lever: [feedzai, quantexa, fingerprintjs, sift, socure]
+    # A posting counts only if it mentions one of these.
+    keywords_any: [fraud, "financial crime", fincrime, mule, "money laundering", federated, aml]
+
+  linkedin:
+    # LinkedIn has no public API and forbids unauthenticated scraping. The
+    # adapter emits ready-to-click search URLs, and will use an authenticated
+    # session only if you export LINKEDIN_COOKIE (li_at value). Off by default.
+    enabled: true
+    use_cookie: false
+
+  conftalks:
+    # Best-effort YouTube search scrape (no API key). Falls back to emitting
+    # search URLs for the configured conference channels / sites.
+    enabled: true
+    youtube: true
+    sites:
+      - "https://www.youtube.com"
